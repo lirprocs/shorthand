@@ -200,7 +200,7 @@ func main() {
 		}
 		outputText = GetPositionBack(&wg, file2, seed2)
 		textEntry2.SetText("")
-		if len(outputText) <= 4500 {
+		if len(outputText) <= 1000000 {
 			textLabel2.SetText("Полученный текст:")
 			outputTextEntry.SetText(outputText)
 		} else {
@@ -222,6 +222,7 @@ func main() {
 			errorLabel2.Refresh()
 			return
 		}
+		dirPath = filepath.Dir(filePath2)
 		err := ToFile(dirPath, outputText)
 		if err != "" {
 			errorLabel2.SetText(err)
