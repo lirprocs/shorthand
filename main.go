@@ -20,6 +20,7 @@ func main() {
 	var filePath string
 	var fileName string
 	var filePath2 string
+	var dirPath string
 	var inputText string
 	var directoryPath string
 	var seed string
@@ -164,6 +165,7 @@ func main() {
 		fileInLabel2.SetText(filePath2)
 		fileInLabel2.Refresh()
 	})
+
 	textEntry2 := widget.NewEntry()
 	textEntry2.SetPlaceHolder("Введите пароль")
 	textEntry2.OnChanged = func(text string) {
@@ -202,9 +204,9 @@ func main() {
 			textLabel2.SetText("Полученный текст:")
 			outputTextEntry.SetText(outputText)
 		} else {
-			textLabel2.SetText("Текст слишком большой и был записан в файл")
+			textLabel2.SetText("Текст слишком большой и был записан в файл" + dirPath)
 			textLabel2.Refresh()
-			dirPath := filepath.Dir(filePath2)
+			dirPath = filepath.Dir(filePath2)
 			err = ToFile(dirPath, outputText)
 			if err != "" {
 				errorLabel2.SetText(err)
@@ -214,6 +216,22 @@ func main() {
 		}
 	})
 
+	saveToFile := widget.NewButton("Сохранить текст в файл", func() {
+		if outputText == "" {
+			errorLabel2.SetText("Пожалуйста, вначале получите текст")
+			errorLabel2.Refresh()
+			return
+		}
+		err := ToFile(dirPath, outputText)
+		if err != "" {
+			errorLabel2.SetText(err)
+			errorLabel2.Refresh()
+			return
+		}
+		errorLabel2.SetText("Текст был записан в файл в деррикторию: " + dirPath)
+		errorLabel2.Refresh()
+	})
+
 	tab2 := container.NewVBox(
 		fileSelect2,
 		fileInContainer2,
@@ -221,6 +239,7 @@ func main() {
 		textLabel2,
 		scrollContainer1,
 		startButton2,
+		saveToFile,
 		errorContainer2,
 	)
 
