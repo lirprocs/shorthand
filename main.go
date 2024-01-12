@@ -16,6 +16,7 @@ func main() {
 	myWindow := myApp.NewWindow("Lirprocs")
 
 	// Создание переменных для путей файлов и текста
+	var errorMy error
 	var filePath string
 	var fileName string
 	var filePath2 string
@@ -30,16 +31,26 @@ func main() {
 
 	// Вкладка 1
 	errorLabel := widget.NewLabel("")
+	//errorLabel.Wrapping = fyne.TextWrapWord
 	errorLabel.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
+	errorContainer := container.NewHScroll(errorLabel)
 
 	fileInLabel := widget.NewLabel("")
+	//fileInLabel.Wrapping = fyne.TextWrapWord
 	fileInLabel.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
+	fileInContainer := container.NewHScroll(fileInLabel)
 
 	fileOutLabel := widget.NewLabel("")
+	//fileOutLabel.Wrapping = fyne.TextWrapWord
 	fileOutLabel.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
+	fileOutContainer := container.NewHScroll(fileOutLabel)
 
 	fileSelect := widget.NewButton("Выбрать файл", func() {
-		filePath, _ = dialog.File().Load()
+		filePath, errorMy = dialog.File().Load()
+		if errorMy != nil {
+			errorLabel.SetText("Не удалось получить файл")
+			errorLabel.Refresh()
+		}
 		fileName = filepath.Base(filePath)
 		//print("Имя файла:", fileName)
 		fileInLabel.SetText(filePath)
@@ -47,6 +58,7 @@ func main() {
 	})
 
 	textEntry := widget.NewMultiLineEntry()
+	//textEntry.Wrapping
 	textEntry.SetPlaceHolder("Введите текст")
 	textEntry.OnChanged = func(text string) {
 		inputText = text
@@ -63,7 +75,11 @@ func main() {
 	}
 
 	dirSelect := widget.NewButton("Выбрать директорию сохранения", func() {
-		directoryPath, _ = dialog.Directory().Title("Выберите директорию").Browse()
+		directoryPath, errorMy = dialog.Directory().Title("Выберите директорию").Browse()
+		if errorMy != nil {
+			errorLabel.SetText("Не удалось получить директорию")
+			errorLabel.Refresh()
+		}
 		fileOutLabel.SetText(directoryPath)
 		fileOutLabel.Refresh()
 		return
@@ -116,28 +132,35 @@ func main() {
 	//tab1 := container.New(layout.NewFormLayout(), fileSelect, textEntry, dirSelect, startButton)
 	tab1 := container.NewVBox(
 		fileSelect,
-		fileInLabel,
+		fileInContainer,
 		scrollContainer,
 		textEntry1,
 		dirSelect,
-		fileOutLabel,
+		fileOutContainer,
 		startButton,
-		errorLabel,
+		errorContainer,
 	)
 
 	// Вкладка 2
 	fileInLabel2 := widget.NewLabel("")
-
+	//fileInLabel2.Wrapping = fyne.TextWrapWord
 	fileInLabel2.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
+	fileInContainer2 := container.NewHScroll(fileInLabel2)
 
 	textLabel2 := widget.NewLabel("")
 	textLabel2.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
 
 	errorLabel2 := widget.NewLabel("")
+	//errorLabel2.Wrapping = fyne.TextWrapWord
 	errorLabel2.TextStyle = fyne.TextStyle{Bold: true, Monospace: true, Italic: true}
+	errorContainer2 := container.NewHScroll(errorLabel2)
 
 	fileSelect2 := widget.NewButton("Выбрать файл", func() {
-		filePath2, _ = dialog.File().Load()
+		filePath2, errorMy = dialog.File().Load()
+		if errorMy != nil {
+			errorLabel2.SetText("Не удалось получить файл")
+			errorLabel2.Refresh()
+		}
 		fileInLabel2.SetText(filePath2)
 		fileInLabel2.Refresh()
 	})
@@ -147,9 +170,12 @@ func main() {
 		seed2 = text
 	}
 	outputTextEntry := widget.NewLabel("")
+	outputTextEntry.Wrapping = fyne.TextWrapWord
 	scrollContainer1 := container.NewVScroll(outputTextEntry)
 	//scrollContainer1.Resize(fyne.NewSize(500, 400))
 	scrollContainer1.SetMinSize(fyne.NewSize(500, 190)) // Установите минимальные размеры
+
+	scrollContainer.SetMinSize(fyne.NewSize(500, 190)) // Установите минимальные размеры
 
 	startButton2 := widget.NewButtonWithIcon("Старт", theme.MediaPlayIcon(), func() {
 		// Действия по нажатию кнопки "Старт"
@@ -166,20 +192,20 @@ func main() {
 		}
 		file2, _, err := GetFile(filePath2)
 		if err != "" {
-			errorLabel.SetText(err)
-			errorLabel.Refresh()
+			errorLabel2.SetText(err)
+			errorLabel2.Refresh()
 			return
 		}
 		outputText = GetPositionBack(&wg, file2, seed2)
 		textEntry2.SetText("")
-		if len(outputText) <= 45 {
+		if len(outputText) <= 4500 {
 			textLabel2.SetText("Полученный текст:")
 			outputTextEntry.SetText(outputText)
 		} else {
 			textLabel2.SetText("Текст слишком большой и был записан в файл")
 			textLabel2.Refresh()
 			dirPath := filepath.Dir(filePath2)
-			err := ToFile(dirPath, outputText)
+			err = ToFile(dirPath, outputText)
 			if err != "" {
 				errorLabel2.SetText(err)
 				errorLabel2.Refresh()
@@ -190,12 +216,12 @@ func main() {
 
 	tab2 := container.NewVBox(
 		fileSelect2,
-		fileInLabel2,
+		fileInContainer2,
 		textEntry2,
 		textLabel2,
 		scrollContainer1,
 		startButton2,
-		errorLabel2,
+		errorContainer2,
 	)
 
 	tabs := container.NewAppTabs(

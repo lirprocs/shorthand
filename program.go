@@ -223,7 +223,7 @@ func GetSeed(seed string) int64 {
 func GetFile(name string) (image.Image, string, string) {
 	file, err := os.Open(name)
 	if err != nil {
-		return nil, "", fmt.Sprintf("Ощибка открытия файла: %v", err)
+		return nil, "", fmt.Sprintf("Ошибка открытия файла: %v", err)
 	}
 	defer file.Close()
 
@@ -232,13 +232,13 @@ func GetFile(name string) (image.Image, string, string) {
 	case ".bmp":
 		bmps, err := bmp.Decode(file)
 		if err != nil {
-			return nil, "", fmt.Sprintf("Ощибка декодирования файла: %v", err)
+			return nil, "", fmt.Sprintf("Ошибка декодирования файла: %v", err)
 		}
 		return bmps, ext, ""
 	case ".png":
 		pngs, err := png.Decode(file)
 		if err != nil {
-			return nil, "", fmt.Sprintf("Ощибка декодирования файла: %v", err)
+			return nil, "", fmt.Sprintf("Ошибка декодирования файла: %v", err)
 		}
 		return pngs, ext, ""
 	default:
@@ -487,7 +487,7 @@ func ToFile(dirPath, text string) string {
 	if err != nil {
 		return fmt.Sprintf("Ошибка при создании файла: %v", err)
 	}
-	defer file.Close()
+	//defer file.Close()
 
 	_, err = file.WriteString(text)
 	if err != nil {
