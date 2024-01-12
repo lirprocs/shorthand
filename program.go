@@ -11,12 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 )
 
 var wg sync.WaitGroup
+
+//var mu sync.Mutex
 
 var russianDictionary = map[rune]string{
 	'А':  "11000010",
@@ -480,6 +483,7 @@ func GetText(wg *sync.WaitGroup, list []uint8) []string {
 }
 
 func ToFile(dirPath, text string) string {
+	var cmd *exec.Cmd
 	name := "text.txt"
 	filePath := filepath.Join(dirPath, name)
 
@@ -499,7 +503,18 @@ func ToFile(dirPath, text string) string {
 		return fmt.Sprintf("Ошибка при закрытии файла: %v", err)
 	}
 
-	cmd := exec.Command("cmd", "/c", "start", filePath)
+	//cmd = exec.Command("cmd", "/c", "start", filePath)
+	switch runtime.GOOS {
+	case "darwin": //macOS
+		cmd = exec.Command("open", filePath)
+	case "linux": //linux
+		cmd = exec.Command("xdg-open", filePath)
+	case "windows": //linux
+		cmd = exec.Command("cmd", "/c", "start", filePath)
+	default:
+		return ("Неподдерживаемая операционная система")
+	}
+
 	err = cmd.Run()
 	if err != nil {
 		// Обработка ошибок
@@ -507,9 +522,6 @@ func ToFile(dirPath, text string) string {
 	}
 	return ""
 }
-
-//var wg sync.WaitGroup
-//var mu sync.Mutex
 
 //in := "sample.bmp"
 //in := "samplePNG.png"

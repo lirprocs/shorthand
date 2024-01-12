@@ -119,7 +119,7 @@ func main() {
 			errorLabel.Refresh()
 			return
 		}
-		err = SaveFile(cimg, directoryPath+`\enc_`+fileName, ext)
+		err = SaveFile(cimg, filepath.Join(directoryPath, "enc_"+fileName), ext)
 		if err != "" {
 			errorLabel.SetText(err)
 			errorLabel.Refresh()
