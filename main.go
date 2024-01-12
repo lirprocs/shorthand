@@ -203,11 +203,13 @@ func main() {
 		if len(outputText) <= 1000000 {
 			textLabel2.SetText("Полученный текст:")
 			outputTextEntry.SetText(outputText)
+			errorLabel2.SetText("Готово")
 		} else {
 			textLabel2.SetText("Текст слишком большой и был записан в файл" + dirPath)
 			textLabel2.Refresh()
 			dirPath = filepath.Dir(filePath2)
 			err = ToFile(dirPath, outputText)
+			errorLabel2.SetText("Готово")
 			if err != "" {
 				errorLabel2.SetText(err)
 				errorLabel2.Refresh()
