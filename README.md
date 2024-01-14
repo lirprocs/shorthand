@@ -11,10 +11,7 @@ git clone [https://github.com/your_username/steganography-tool.git](https://gith
 ```bash
 fyne package -os windows -icon icon.png
 ```
-3) Запустить полученый файл
-```bash
-fyne package -os windows -icon icon.png
-```
+3) Запустить полученый файл shorthand
 ### Без GUI приложения
 1) Скопировать проект 
 ```bash
