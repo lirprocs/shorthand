@@ -225,6 +225,9 @@ func main() {
 
 		var textFromFile strings.Builder
 		scanner := bufio.NewScanner(file)
+		bufSize := 50 * 1024 * 1024 // 50 МБ
+		scanner.Buffer(make([]byte, bufSize), bufSize)
+
 		for scanner.Scan() {
 			textFromFile.WriteString(scanner.Text() + "\n")
 		}
@@ -388,10 +391,24 @@ func main() {
 
 	saveToFile := widget.NewButton("Сохранить текст в файл", func() {
 		if outputText == "" {
-			errorLabel2.SetText("Пожалуйста, вначале получите текст")
-			errorLabel2.Refresh()
-			return
+			if seed2 == "" {
+				errorLabel2.SetText("Пожалуйста, введите пароль")
+				errorLabel2.Refresh()
+				return
+			} else if filePath2 == "" {
+				errorLabel2.SetText("Пожалуйста, выберите файл")
+				errorLabel2.Refresh()
+				return
+			}
+			file2, _, err := GetFile(filePath2)
+			if err != "" {
+				errorLabel2.SetText(err)
+				errorLabel2.Refresh()
+				return
+			}
+			outputText = decrypt.GetPositionBack(&wg, file2, seed2)
 		}
+
 		dirPath = filepath.Dir(filePath2)
 		err := ToFile(dirPath, outputText)
 		if err != "" {
