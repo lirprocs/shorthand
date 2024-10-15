@@ -28,17 +28,17 @@ main.go создает графический интерфейс пользов�
 ### Со сборкой GUI приложения.
 1) Скопировать проект 
 ```bash
-git clone [https://github.com/your_username/steganography-tool.git](https://github.com/lirprocs/shorthand.git)
+git clone https://github.com/lirprocs/shorthand.git
 ```
 2) Собрать fyne прект
 ```bash
-fyne package -os windows -icon icon.png
+fyne package -os windows -icon Samples/ico.ico
 ```
 3) Запустить полученый файл shorthand
 ### Без GUI приложения
 1) Скопировать проект 
 ```bash
-git clone [https://github.com/your_username/steganography-tool.git](https://github.com/lirprocs/shorthand.git)
+git clone https://github.com/lirprocs/shorthand.git
 ```
 2) Закоментировать main.go и разкоментировать функцию main в program.go
 3) Указать необходимые параметры в функции main
