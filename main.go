@@ -1,24 +1,161 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/sqweek/dialog"
+	"golang.org/x/image/bmp"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	decrypt "shorthand/Decryption"
+	encrypt "shorthand/Encryption"
+	"strings"
+	"sync"
 )
 
+var wg sync.WaitGroup
+
+func GetFile(name string) (image.Image, string, string) {
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, "", fmt.Sprintf("Ошибка открытия файла: %v", err)
+	}
+	defer file.Close()
+
+	ext := filepath.Ext(name)
+	var img image.Image
+	switch ext {
+	case ".bmp":
+		bmps, err := bmp.Decode(file)
+		if err != nil {
+			return nil, "", fmt.Sprintf("Ошибка декодирования файла: %v", err)
+		}
+		//return bmps, ext, ""
+		img = bmps
+	case ".png":
+		pngs, err := png.Decode(file)
+		if err != nil {
+			return nil, "", fmt.Sprintf("Ошибка декодирования файла: %v", err)
+		}
+		//return pngs, ext, ""
+		img = pngs
+	default:
+		return nil, "", fmt.Sprintf("Не верный тип файла используйте bmp/png")
+	}
+
+	// Проверка, является ли изображение в градациях серого (Gray)
+	if grayImg, ok := img.(*image.Gray); ok {
+		// Можно либо вернуть предупреждение, либо преобразовать в RGBA
+		rgbaImg := ConvertGrayToRGBA(grayImg)
+		return rgbaImg, ext, ""
+	}
+
+	return img, ext, ""
+}
+
+func ConvertGrayToRGBA(grayImg *image.Gray) *image.RGBA {
+	bounds := grayImg.Bounds()
+	rgbaImg := image.NewRGBA(bounds)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			grayColor := grayImg.GrayAt(x, y)
+			rgbaColor := color.RGBA{
+				R: grayColor.Y,
+				G: grayColor.Y,
+				B: grayColor.Y,
+				A: 255,
+			}
+			rgbaImg.Set(x, y, rgbaColor)
+		}
+	}
+
+	return rgbaImg
+}
+
+func SaveFile(file image.Image, name string, ext string) string {
+	outputFile, err := os.Create(name)
+	if err != nil {
+		return fmt.Sprintf("Ошибка создания файла: %v", err)
+	}
+	defer outputFile.Close()
+
+	switch ext {
+	case ".bmp":
+		err = bmp.Encode(outputFile, file)
+		if err != nil {
+			return fmt.Sprintf("Ошибка кодирования: %v", err)
+		}
+	case ".png":
+		err = png.Encode(outputFile, file)
+		if err != nil {
+			return fmt.Sprintf("Ошибка кодирования: %v", err)
+		}
+	default:
+		return ""
+	}
+	return ""
+}
+
+func ToFile(dirPath, text string) string {
+	var cmd *exec.Cmd
+	name := "text.txt"
+	filePath := filepath.Join(dirPath, name)
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Sprintf("Ошибка при создании файла: %v", err)
+	}
+	//defer file.Close()
+
+	_, err = file.WriteString(text)
+	if err != nil {
+		return fmt.Sprintf("Ошибка при записи в файл: %v", err)
+	}
+
+	err = file.Close()
+	if err != nil {
+		return fmt.Sprintf("Ошибка при закрытии файла: %v", err)
+	}
+
+	//cmd = exec.Command("cmd", "/c", "start", filePath)
+	switch runtime.GOOS {
+	case "darwin": //macOS
+		cmd = exec.Command("open", filePath)
+	case "linux": //linux
+		cmd = exec.Command("xdg-open", filePath)
+	case "windows": //linux
+		cmd = exec.Command("cmd", "/c", "start", filePath)
+	default:
+		return ("Неподдерживаемая операционная система")
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		// Обработка ошибок
+		return fmt.Sprintf("Ошибка при открытии файла: %v", err)
+	}
+	return ""
+}
+
 func main() {
-	//var mu sync.Mutex
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Lirprocs")
 
-	// Создание переменных для путей файлов и текста
 	var errorMy error
 	var filePath string
 	var fileName string
+	var textFilePath string
 	var filePath2 string
 	var dirPath string
 	var inputText string
@@ -27,7 +164,7 @@ func main() {
 	var seed2 string
 	var outputText string
 
-	icon, _ := fyne.LoadResourceFromPath("icon.png")
+	icon, _ := fyne.LoadResourceFromPath("Samples/ico.ico")
 	myWindow.SetIcon(icon)
 
 	// Вкладка 1
@@ -66,8 +203,42 @@ func main() {
 	}
 
 	scrollContainer := container.NewVScroll(textEntry)
-	//scrollContainer.Resize(fyne.NewSize(200, 100))     // Установите необходимые размеры
-	scrollContainer.SetMinSize(fyne.NewSize(200, 150)) // Установите минимальные размеры
+	//scrollContainer.Resize(fyne.NewSize(200, 100))
+	scrollContainer.SetMinSize(fyne.NewSize(200, 150))
+
+	// Новая кнопка для загрузки текста из файла
+	loadTextFromFile := widget.NewButton("Загрузить текст из файла", func() {
+		textFilePath, errorMy = dialog.File().Filter("Text files", "txt").Load()
+		if errorMy != nil {
+			errorLabel.SetText("Не удалось загрузить файл")
+			errorLabel.Refresh()
+			return
+		}
+
+		file, err := os.Open(textFilePath)
+		if err != nil {
+			errorLabel.SetText("Ошибка открытия файла")
+			errorLabel.Refresh()
+			return
+		}
+		defer file.Close()
+
+		var textFromFile strings.Builder
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			textFromFile.WriteString(scanner.Text() + "\n")
+		}
+
+		if err = scanner.Err(); err != nil {
+			errorLabel.SetText("Ошибка чтения файла")
+			errorLabel.Refresh()
+			return
+		}
+
+		inputText = textFromFile.String()
+		errorLabel.SetText("Файл успешно загружен")
+		errorLabel.Refresh()
+	})
 
 	textEntry1 := widget.NewEntry()
 	textEntry1.SetPlaceHolder("Придумайте пароль")
@@ -87,7 +258,6 @@ func main() {
 	})
 
 	startButton := widget.NewButtonWithIcon("Старт", theme.MediaPlayIcon(), func() {
-		// Действия по нажатию кнопки "Старт"
 		//errorLabel.SetText("")
 		if filePath == "" {
 			errorLabel.SetText("Пожалуйста, выберите путь до изображения")
@@ -113,7 +283,7 @@ func main() {
 			return
 		}
 
-		cimg, err := GetPosition(&wg, seed, inputText, file)
+		cimg, err := encrypt.GetPosition(&wg, seed, inputText, file)
 		if err != "" {
 			errorLabel.SetText(err)
 			errorLabel.Refresh()
@@ -130,11 +300,11 @@ func main() {
 		return
 	})
 
-	//tab1 := container.New(layout.NewFormLayout(), fileSelect, textEntry, dirSelect, startButton)
 	tab1 := container.NewVBox(
 		fileSelect,
 		fileInContainer,
 		scrollContainer,
+		loadTextFromFile,
 		textEntry1,
 		dirSelect,
 		fileOutContainer,
@@ -175,13 +345,11 @@ func main() {
 	outputTextEntry.Wrapping = fyne.TextWrapWord
 	scrollContainer1 := container.NewVScroll(outputTextEntry)
 	//scrollContainer1.Resize(fyne.NewSize(500, 400))
-	scrollContainer1.SetMinSize(fyne.NewSize(500, 190)) // Установите минимальные размеры
+	scrollContainer1.SetMinSize(fyne.NewSize(500, 230))
 
-	scrollContainer.SetMinSize(fyne.NewSize(500, 190)) // Установите минимальные размеры
+	scrollContainer.SetMinSize(fyne.NewSize(500, 190))
 
 	startButton2 := widget.NewButtonWithIcon("Старт", theme.MediaPlayIcon(), func() {
-		// Действия по нажатию кнопки "Старт"
-		// Сюда можно добавить вывод текста из файла в outputTextEntry
 		errorLabel.SetText("")
 		if filePath2 == "" {
 			errorLabel2.SetText("Пожалуйста, выберите файл")
@@ -198,7 +366,7 @@ func main() {
 			errorLabel2.Refresh()
 			return
 		}
-		outputText = GetPositionBack(&wg, file2, seed2)
+		outputText = decrypt.GetPositionBack(&wg, file2, seed2)
 		textEntry2.SetText("")
 		if len(outputText) <= 1000000 {
 			textLabel2.SetText("Полученный текст:")
