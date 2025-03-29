@@ -144,7 +144,7 @@ func GetPosition(wg *sync.WaitGroup, cipher bool, seedOld string, plainText, aTe
 	seed := GetSeed(seedOld)
 	copy(key[:], seedOld)
 	pText := StringToBin(wg, plainText)
-	imitoText := StringToBin(wg, aText) //TODO
+	imitoText := StringToBin(wg, aText)
 	err, b, t := mgm.Encrypt(imitoText, pText, key, nonce)
 	bin := mergeSlices(b, t, nonce)
 	if err != nil {

@@ -295,7 +295,7 @@ func main() {
 			return
 		}
 
-		//TODO cipher
+		//TODO cipher := Добавить 2 режима, но надо ли???(НЕТ)
 
 		cipher := true
 		cimg, err := encrypt.GetPosition(&wg, cipher, seed, inputText, aText, file)
@@ -390,7 +390,6 @@ func main() {
 			return
 		}
 
-		//TODO aText2
 		outputText = decrypt.GetPositionBack(&wg, file2, seed2, aText2)
 		textEntry2.SetText("")
 		if len(outputText) <= 1000000 {
@@ -429,7 +428,6 @@ func main() {
 				return
 			}
 
-			//TODO
 			outputText = decrypt.GetPositionBack(&wg, file2, seed2, aText2)
 		}
 
