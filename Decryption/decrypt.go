@@ -1,6 +1,9 @@
 package decrypt
 
 import (
+	"bytes"
+	"fmt"
+	mgm "github.com/lirprocs/MGM"
 	"image"
 	"image/color"
 	"math/rand"
@@ -66,12 +69,34 @@ func GetText(wg *sync.WaitGroup, list []uint8) []string {
 	return list1
 }
 
-func GetPositionBack(wg *sync.WaitGroup, file image.Image, seedOld string) string {
+func splitSlices(data []byte) (error, [][16]byte, []byte, [16]byte) {
+	var cText [][16]byte
+	var nonce [16]byte
+
+	parts := bytes.Split(data, encrypt.Separator)
+	if len(parts) < 3 {
+		return fmt.Errorf("not enough parts after split"), nil, nil, [16]byte{}
+	}
+
+	c := parts[0]
+	for i := 0; i < len(c); i += 16 {
+		var block [16]byte
+		copy(block[:], c[i:min(i+16, len(c))])
+		cText = append(cText, block)
+	}
+	t := parts[1]
+	copy(nonce[:], parts[2])
+	return nil, cText, t, nonce
+}
+
+func GetPositionBack(wg *sync.WaitGroup, file image.Image, seedOld, aText string) string {
+	var key [32]byte
 	pol := map[int][]int{
 		encrypt.Y1: {encrypt.X1},
 	}
 	i := uint64(0)
 	seed := encrypt.GetSeed(seedOld)
+	copy(key[:], seedOld)
 	lenText := GetInfo(file, &pol)
 	bounds := file.Bounds()
 	width, height := bounds.Max.X, bounds.Max.Y
@@ -97,6 +122,15 @@ func GetPositionBack(wg *sync.WaitGroup, file image.Image, seedOld string) strin
 	}
 	wg.Wait()
 	//textList := GetText(wg, list)
-	text := strings.Join(GetText(wg, list), "")
+	err, cText, t, nonce := splitSlices(list)
+	if err != nil {
+		return strings.Join(GetText(wg, list), "")
+	}
+	err, decrText, a := mgm.Decrypt(cText, t, []byte(aText), key, nonce)
+	if err != nil {
+		return fmt.Sprintf("%v", err)
+	}
+	text := strings.Join(GetText(wg, decrText), "")
+	fmt.Println(a)
 	return text
 }

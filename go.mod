@@ -1,9 +1,10 @@
 module shorthand
 
-go 1.21
+go 1.23.3
 
 require (
 	fyne.io/fyne/v2 v2.4.3
+	github.com/lirprocs/MGM v0.0.0-20250328185200-5a890349b7c8
 	github.com/sqweek/dialog v0.0.0-20220809060634-e981b270ebbf
 	golang.org/x/image v0.14.0
 )
@@ -24,6 +25,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
 	github.com/jsummers/gobmp v0.0.0-20151104160322-e2ba15ffa76e // indirect
+	github.com/lirprocs/Kuznyechik v0.0.0-20250316214253-46ebb7e0fd8c // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect

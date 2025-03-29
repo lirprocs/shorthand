@@ -13,6 +13,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	//"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,8 @@ func main() {
 	var seed string
 	var seed2 string
 	var outputText string
+	var aText string
+	var aText2 string
 
 	icon, _ := fyne.LoadResourceFromPath("Samples/ico.ico")
 	myWindow.SetIcon(icon)
@@ -200,6 +203,12 @@ func main() {
 	textEntry.SetPlaceHolder("Введите текст")
 	textEntry.OnChanged = func(text string) {
 		inputText = text
+	}
+
+	aTextEntry := widget.NewMultiLineEntry()
+	aTextEntry.SetPlaceHolder("Введите имитозащищаемые данные (Не обязательно)")
+	aTextEntry.OnChanged = func(text string) {
+		aText = text
 	}
 
 	scrollContainer := container.NewVScroll(textEntry)
@@ -286,7 +295,10 @@ func main() {
 			return
 		}
 
-		cimg, err := encrypt.GetPosition(&wg, seed, inputText, file)
+		//TODO cipher
+
+		cipher := true
+		cimg, err := encrypt.GetPosition(&wg, cipher, seed, inputText, aText, file)
 		if err != "" {
 			errorLabel.SetText(err)
 			errorLabel.Refresh()
@@ -307,6 +319,7 @@ func main() {
 		fileSelect,
 		fileInContainer,
 		scrollContainer,
+		aTextEntry,
 		loadTextFromFile,
 		textEntry1,
 		dirSelect,
@@ -344,6 +357,13 @@ func main() {
 	textEntry2.OnChanged = func(text string) {
 		seed2 = text
 	}
+
+	aTextEntry2 := widget.NewMultiLineEntry()
+	aTextEntry2.SetPlaceHolder("Введите имитозащищаемые данные (Не обязательно)")
+	aTextEntry2.OnChanged = func(text string) {
+		aText2 = text
+	}
+
 	outputTextEntry := widget.NewLabel("")
 	outputTextEntry.Wrapping = fyne.TextWrapWord
 	scrollContainer1 := container.NewVScroll(outputTextEntry)
@@ -369,7 +389,9 @@ func main() {
 			errorLabel2.Refresh()
 			return
 		}
-		outputText = decrypt.GetPositionBack(&wg, file2, seed2)
+
+		//TODO aText2
+		outputText = decrypt.GetPositionBack(&wg, file2, seed2, aText2)
 		textEntry2.SetText("")
 		if len(outputText) <= 1000000 {
 			textLabel2.SetText("Полученный текст:")
@@ -406,7 +428,9 @@ func main() {
 				errorLabel2.Refresh()
 				return
 			}
-			outputText = decrypt.GetPositionBack(&wg, file2, seed2)
+
+			//TODO
+			outputText = decrypt.GetPositionBack(&wg, file2, seed2, aText2)
 		}
 
 		dirPath = filepath.Dir(filePath2)
@@ -423,6 +447,7 @@ func main() {
 	tab2 := container.NewVBox(
 		fileSelect2,
 		fileInContainer2,
+		aTextEntry2,
 		textEntry2,
 		textLabel2,
 		scrollContainer1,
@@ -441,3 +466,61 @@ func main() {
 	myWindow.SetContent(tabs)
 	myWindow.ShowAndRun()
 }
+
+//func main() {
+//	var wg sync.WaitGroup
+//	var mu sync.Mutex
+//
+//	in := "sample.bmp"
+//	in := "samplePNG.png"
+//	in := "sampleBMP.bmp"
+//	out := "output"
+//	out := "sample_output"
+//	strok := "Hello my frend!"
+//	strok = "Привет мой друг!"
+//	strok := "Привет мой frend!"
+//	strok := "In the bustling city, where lights never dim and life never slows, people weave through crowded streets, chasing dreams and evading shadows"
+//	strok1 := "а б в г д е ё ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я А Б В Г Д Е Ё Ж З И Й К Л М Н О П Р С Т У Ф Х Ц Ч Ш Щ Ъ Ы Ь Э Ю Я , . ! ? - : ; ( ) ' [ ] { } < > / | _ @ # $ % ^ & * + ="
+//	strok2 := "a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z , . ! ? - : ; ( ) ' [ ] { } < > /  | _ @ # $ % ^ & * + = "
+//	strok := strok1 + strok2
+//
+//	seed := "8812332wkjwjw!@#$%"
+//	in := "sampleBMP.bmp"
+//
+//	file, ext, err := GetFile(in)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	//Поле для ввод с клавиатуры любого текста
+//	strok := "Привет мой frend!"
+//	//Поле для ввод с клавиатуры пароля
+//	seed := "8812332wkjwjw!@#$%"
+//
+//	cimg, err := GetPosition(&wg, seed, strok, file)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	//Поле для ввода пути сохранения файла
+//	out := "output"
+//
+//	err = SaveFile(cimg, out, ext)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	out1 := "output.bmp"
+//
+//	file2, ext, err := GetFile(out1)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	//Поле для ввод с клавиатуры пароля
+//	seed = "8812332wkjwjw!@#$%"
+//	list := decrypt.GetPositionBack(&wg, file2, seed)
+//
+//	//Поле для вывода полученного текста
+//	fmt.Println(list)
+//}

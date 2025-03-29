@@ -1,7 +1,9 @@
 package encrypt
 
 import (
+	crypto "crypto/rand"
 	"fmt"
+	mgm "github.com/lirprocs/MGM"
 	"image"
 	"image/color"
 	"math/rand"
@@ -11,6 +13,8 @@ import (
 )
 
 const X1, Y1 = 8, 8
+
+var Separator = []byte{0x00, 0xFF, 0x00}
 
 type MyUint interface {
 	uint | uint8 | uint16 | uint32 | uint64
@@ -61,7 +65,7 @@ func StringToBin(wg *sync.WaitGroup, s string) []uint8 {
 	return list
 }
 
-func SetInfo(file Changeable, lenText int, pol *map[int][]int) Changeable { // Функция записи данных о длине и типе
+func SetInfo(file Changeable, cipher bool, lenText int, pol *map[int][]int) Changeable { // Функция записи данных о длине и типе
 	x, y := X1, Y1
 	cimg := file.(Changeable)
 	binary := UintToBinary(uint64(lenText), 63)
@@ -110,15 +114,43 @@ func ChangeIMG(wg *sync.WaitGroup, x, y, i int, bin []uint8, img Changeable) {
 	//mu.Unlock()
 }
 
-func GetPosition(wg *sync.WaitGroup, seedOld string, strok string, file image.Image) (image.Image, string) {
+func mergeSlices(cipherText [][16]byte, t []byte, nonce [16]byte) []byte {
+	var res []byte
+	for _, v := range cipherText {
+		res = append(res, v[:]...)
+	}
+
+	res = append(res, Separator...)
+	res = append(res, t...)
+	res = append(res, Separator...)
+	res = append(res, nonce[:]...)
+
+	return res
+}
+
+func GetPosition(wg *sync.WaitGroup, cipher bool, seedOld string, plainText, aText string, file image.Image) (image.Image, string) {
+	var key [32]byte
+	var nonce [16]byte
+	_, err := crypto.Read(nonce[:])
+	if err != nil {
+		nonce = [16]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x00, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88}
+	}
+
 	img := file.(Changeable)
 	pol := map[int][]int{
 		Y1: {X1},
 	}
 	i := 0
 	seed := GetSeed(seedOld)
-	bin := StringToBin(wg, strok)
-	img = SetInfo(img, len(bin), &pol)
+	copy(key[:], seedOld)
+	pText := StringToBin(wg, plainText)
+	imitoText := StringToBin(wg, aText) //TODO
+	err, b, t := mgm.Encrypt(imitoText, pText, key, nonce)
+	bin := mergeSlices(b, t, nonce)
+	if err != nil {
+		return nil, fmt.Sprintf("%e", err)
+	}
+	img = SetInfo(img, cipher, len(bin), &pol)
 	bounds := img.Bounds()
 	width, height := bounds.Max.X, bounds.Max.Y
 	if width*height-len(pol) >= len(bin) {

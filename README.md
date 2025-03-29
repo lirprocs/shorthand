@@ -40,7 +40,7 @@ fyne package -os windows -icon Samples/ico.ico
 ```bash
 git clone https://github.com/lirprocs/shorthand.git
 ```
-2) Закоментировать main.go и разкоментировать функцию main в program.go
+2) Закоментировать main.go и разкоментировать функцию main в main.go
 3) Указать необходимые параметры в функции main
 4) Запустить приложение
 ```bash
