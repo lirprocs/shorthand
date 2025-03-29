@@ -35,15 +35,15 @@ git clone https://github.com/lirprocs/shorthand.git
 fyne package -os windows -icon Samples/ico.ico
 ```
 3) Запустить полученый файл shorthand
-### Без GUI приложения
+### Без GUI приложения (Не реклмендуется необходимы правки)
 1) Скопировать проект 
 ```bash
 git clone https://github.com/lirprocs/shorthand.git
 ```
-2) Закоментировать main.go и разкоментировать функцию main в main.go
+2) Закоментировать main.go и разкоментировать вторую функцию main в main.go
 3) Указать необходимые параметры в функции main
 4) Запустить приложение
 ```bash
-go run program.go
+go run main.go
 ```
 5) Полученный результат будет выведен в консоль
