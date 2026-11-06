@@ -440,3 +440,6 @@ func flat5(c *Cover, e int) bool {
 	}
 	return true
 }
+
+// UsableCount — число элементов, пригодных для встраивания.
+func UsableCount(c *Cover) int { return usableCount(c) }
