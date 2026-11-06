@@ -21,10 +21,15 @@ type Options struct {
 	Password string
 	AAD      []byte // имитозащищаемые данные (не встраиваются, нужны при извлечении)
 
-	// Для экспериментов: фиксированный nonce и заранее выработанный master
-	// (чтобы не считать Argon2 в каждом опыте). В программе не используются.
+	// Для экспериментов (cmd/stegobench), в программе не используются:
+	// фиксированный nonce, заранее выработанный master (чтобы не считать
+	// Argon2 в каждом опыте), готовая полезная нагрузка вместо текста и
+	// другие параметры STC вместо параметров уровня.
 	Nonce  []byte
 	Master []byte
+	Raw    []byte
+	H      int
+	MaxW   int
 }
 
 // Report — что и как встроено.
@@ -81,10 +86,21 @@ func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
 	if !opt.Mode.Valid() || opt.Level > LevelMax {
 		return nil, nil, errors.New("неверный режим или уровень")
 	}
-	sym := alphabet.Encode(text)
-	method, comp := compress.Compress(sym)
+	var method compress.Method
+	var comp []byte
+	if opt.Raw != nil {
+		comp = opt.Raw
+	} else {
+		method, comp = compress.Compress(alphabet.Encode(text))
+	}
 	aead, _ := opt.Mode.NewAEAD(make([]byte, opt.Mode.KeySize()))
 	lp := opt.Level.Params()
+	if opt.H > 0 {
+		lp.H = opt.H
+	}
+	if opt.MaxW > 0 {
+		lp.MaxW = min(opt.MaxW, maxW)
+	}
 	r := &Report{
 		Mode: opt.Mode, Level: opt.Level, Method: method,
 		Chars:      len([]rune(text)),

@@ -107,7 +107,7 @@ type LevelParams struct {
 var levelParams = [3]LevelParams{
 	LevelNormal: {RS: 32, H: 10, MaxW: maxW},
 	LevelHigh:   {RS: 64, H: 1, MaxW: 4},
-	LevelMax:    {RS: 128, H: 1, MaxW: 2},
+	LevelMax:    {RS: 128, H: 1, MaxW: 1},
 }
 
 func (l Level) Params() LevelParams { return levelParams[l] }

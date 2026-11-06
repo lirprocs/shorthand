@@ -2,18 +2,11 @@ module github.com/lirprocs/shorthand
 
 go 1.26.0
 
-// До слияния PR в lirprocs/MGM — локальный клон с исправлениями
-// (ветка fix-counters-length). После слияния строку replace убрать
-// и обновить версию: go get github.com/lirprocs/MGM@master
-replace github.com/lirprocs/MGM => ../MGM
-
-require (
-	github.com/lirprocs/Kuznyechik v0.0.0-20250322221820-7703e70b67ba
-	github.com/lirprocs/MGM v0.0.0-00010101000000-000000000000
-)
+require github.com/lirprocs/Kuznyechik v0.0.0-20250322221820-7703e70b67ba
 
 require (
 	fyne.io/fyne/v2 v2.4.3
+	github.com/lirprocs/MGM v0.0.0-20261106234213-acbc7262b675
 	github.com/sqweek/dialog v0.0.0-20220809060634-e981b270ebbf
 	golang.org/x/image v0.47.0
 )
