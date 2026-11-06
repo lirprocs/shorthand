@@ -12,6 +12,8 @@ require (
 	github.com/lirprocs/MGM v0.0.0-00010101000000-000000000000
 )
 
+require golang.org/x/image v0.47.0
+
 require (
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0 // indirect
