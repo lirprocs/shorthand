@@ -26,6 +26,8 @@ var (
 	procSetWindowPos        = user32.NewProc("SetWindowPos")
 	procGetWindowTPID       = user32.NewProc("GetWindowThreadProcessId")
 	procSendMessage         = user32.NewProc("SendMessageW")
+	procGetForeground       = user32.NewProc("GetForegroundWindow")
+	procRedrawWindow        = user32.NewProc("RedrawWindow")
 	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
 	procGetSystemMetricsDpi = user32.NewProc("GetSystemMetricsForDpi")
 	procGetDpiForWindow     = user32.NewProc("GetDpiForWindow")
@@ -49,6 +51,10 @@ const (
 	swpNoActivate                  = 0x0010
 	swpFrameChanged                = 0x0020
 	wmSetIcon                      = 0x0080
+	wmNCActivate                   = 0x0086
+	rdwInvalidate                  = 0x0001
+	rdwUpdateNow                   = 0x0100
+	rdwFrame                       = 0x0400
 	iconSmall                      = 0
 	iconBig                        = 1
 	smCxIcon                       = 11
@@ -97,7 +103,24 @@ func darkTitleBar(hwnd uintptr) bool {
 		procDwmSetAttr.Call(hwnd, dwmaUseImmersiveDarkModeBefore, uintptr(unsafe.Pointer(&on)), 4)
 	}
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoSize|swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged)
+	repaintCaption(hwnd)
 	return false // проверим на следующем шаге, что значение удержалось
+}
+
+// repaintCaption заставляет Windows перерисовать заголовок. Windows 10 после
+// смены DWMWA_USE_IMMERSIVE_DARK_MODE у показанного окна оставляет заголовок
+// прежним (белым), пока окно не потеряет и не получит фокус, — SWP_FRAMECHANGED
+// этого не делает. Поэтому заголовок «деактивируется» и возвращается в
+// настоящее состояние сообщениями WM_NCACTIVATE.
+func repaintCaption(hwnd uintptr) {
+	fg, _, _ := procGetForeground.Call()
+	active := uintptr(0)
+	if fg == hwnd {
+		active = 1
+	}
+	procSendMessage.Call(hwnd, wmNCActivate, 1-active, 0)
+	procSendMessage.Call(hwnd, wmNCActivate, active, 0)
+	procRedrawWindow.Call(hwnd, 0, 0, rdwFrame|rdwInvalidate|rdwUpdateNow)
 }
 
 // iconSize — размер значка (SM_CXSMICON или SM_CXICON) с учётом масштаба окна.
