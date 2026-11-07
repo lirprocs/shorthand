@@ -61,9 +61,12 @@ func monoLabel() *widget.Label {
 	return l
 }
 
+const windowTitle = "Shorthand — стеганография"
+
 func main() {
 	a := app.New()
-	w := a.NewWindow("Shorthand — стеганография")
+	useDarkTheme(a, windowTitle)
+	w := a.NewWindow(windowTitle)
 	w.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
 
 	w.SetContent(container.NewAppTabs(
