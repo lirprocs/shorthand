@@ -1,0 +1,5 @@
+{
+  "FixedFileInfo": {"FileVersion": {"Major": 3}, "ProductVersion": {"Major": 3}},
+  "StringFileInfo": {"FileDescription": "Shorthand", "ProductName": "Shorthand", "FileVersion": "3.0", "ProductVersion": "3.0"},
+  "IconPath": "icon.ico"
+}

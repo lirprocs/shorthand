@@ -55,6 +55,15 @@
 go build -ldflags "-H=windowsgui" -o shorthand.exe ./cmd/shorthand
 ```
 
+Значок файла и описание встроены ресурсом `cmd/shorthand/resource_windows_amd64.syso`
+(его подхватывает обычный `go build`). Собран из `icon.ico` (16–64 px — упрощённый
+рисунок замка, 256 px — `Samples/ico.ico`) и `versioninfo.json` утилитой
+`goversioninfo` v1.4.1. `fyne package` 2.4.3 с Go 1.26 не собирается. Пересоздать:
+
+```bash
+go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.1 -64 -o resource_windows_amd64.syso versioninfo.json
+```
+
 Проверки:
 
 ```bash
