@@ -9,12 +9,28 @@ import (
 )
 
 // darkTheme — стандартная тема Fyne, всегда в тёмном варианте, независимо
-// от настройки Windows «Режим приложения по умолчанию».
+// от настройки Windows «Режим приложения по умолчанию». Синий акцент Fyne
+// заменён зелёным логотипа (как в icon.png): активная вкладка, рамка поля в
+// фокусе, выделение текста, ссылки. Остальные цвета — стандартные.
 type darkTheme struct{}
 
 var _ fyne.Theme = darkTheme{}
 
+var (
+	accent          = color.NRGBA{0x1d, 0xe6, 0x12, 0xff} // зелёный логотипа
+	accentFocus     = color.NRGBA{0x1d, 0xe6, 0x12, 0x55}
+	accentSelection = color.NRGBA{0x1d, 0xe6, 0x12, 0x40}
+)
+
 func (darkTheme) Color(n fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
+	switch n {
+	case theme.ColorNamePrimary, theme.ColorNameHyperlink:
+		return accent
+	case theme.ColorNameFocus:
+		return accentFocus
+	case theme.ColorNameSelection:
+		return accentSelection
+	}
 	return theme.DefaultTheme().Color(n, theme.VariantDark)
 }
 
