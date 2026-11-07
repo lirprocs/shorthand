@@ -22,15 +22,14 @@ func (darkTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.Default
 func (darkTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
 func (darkTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }
 
-// useDarkTheme включает тёмную тему и тёмный заголовок окна. Fyne 2.4 красит
-// заголовок по настройке Windows один раз, при создании окна, поэтому после
-// того как окно стало видимым, он перекрашивается ещё раз (darkTitleBar,
-// только Windows): попытки каждые 100 мс до 10 с, пока значение не удержится.
+// useDarkTheme включает тёмную тему, а после появления окна — тёмный
+// заголовок и значки точного размера (decorateWindow, только Windows):
+// попытки каждые 100 мс до 10 с, пока всё не удержится.
 func useDarkTheme(a fyne.App, title string) {
 	a.Settings().SetTheme(darkTheme{})
 	go func() {
 		for i := 0; i < 100; i++ {
-			if darkTitleBar(title) {
+			if decorateWindow(title) {
 				return
 			}
 			time.Sleep(100 * time.Millisecond)

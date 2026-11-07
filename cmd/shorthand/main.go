@@ -29,8 +29,13 @@ import (
 	"github.com/lirprocs/shorthand/internal/stego"
 )
 
+// icon.png — кадр 256×256 из Samples/ico.ico (значок для Fyne; мелкие значки
+// окна рисуются в icon.go).
+//
 //go:embed icon.png
 var iconPNG []byte
+
+const windowTitle = "Shorthand — стеганография"
 
 var (
 	modeNames  = []string{suite.KuznyechikMGM.String(), suite.AsconAEAD128.String(), suite.MagmaMGM.String()}
@@ -55,13 +60,34 @@ func levelByName(s string) stego.Level {
 	return stego.LevelNormal
 }
 
-func monoLabel() *widget.Label {
-	l := widget.NewLabel("")
-	l.Wrapping = fyne.TextWrapWord
+// pathLabel — одна строка, длинный текст обрезается, окно от него не растёт.
+func pathLabel(text string) *widget.Label {
+	l := widget.NewLabel(text)
+	l.Wrapping = fyne.TextTruncate
 	return l
 }
 
-const windowTitle = "Shorthand — стеганография"
+// showPath — «имя файла — папка»: при обрезке длинного пути пропадает конец
+// папки, а не имя файла.
+func showPath(prefix, p string) string {
+	return prefix + filepath.Base(p) + "  —  " + filepath.Dir(p)
+}
+
+// fixedLabel — подпись с переносом по словам в области высотой lines строк:
+// размер окна не зависит от длины сообщения.
+func fixedLabel(lines int) (*widget.Label, fyne.CanvasObject) {
+	l := widget.NewLabel("")
+	l.Wrapping = fyne.TextWrapWord
+	s := container.NewVScroll(l)
+	line := fyne.MeasureText("Ag", theme.TextSize(), fyne.TextStyle{}).Height
+	s.SetMinSize(fyne.NewSize(0, float32(lines)*line+2*theme.InnerPadding()+2))
+	return l, s
+}
+
+func isImage(p string) bool {
+	_, err := imageio.FormatOf(p)
+	return err == nil
+}
 
 func main() {
 	a := app.New()
@@ -69,191 +95,281 @@ func main() {
 	w := a.NewWindow(windowTitle)
 	w.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
 
-	w.SetContent(container.NewAppTabs(
-		container.NewTabItem("Встраивание", embedTab(w)),
-		container.NewTabItem("Извлечение", extractTab(w)),
-	))
-	w.Resize(fyne.NewSize(640, 720))
+	emb := newEmbedTab()
+	ext := newExtractTab()
+	tabs := container.NewAppTabs(
+		container.NewTabItem("Встраивание", emb.content),
+		container.NewTabItem("Извлечение", ext.content),
+	)
+	w.SetContent(tabs)
+
+	// файлы, брошенные на окно, — на текущую вкладку
+	w.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
+		for _, u := range uris {
+			if u.Scheme() != "file" {
+				continue
+			}
+			p := filepath.FromSlash(u.Path())
+			if tabs.SelectedIndex() == 0 {
+				emb.drop(p)
+			} else {
+				ext.drop(p)
+			}
+		}
+	})
+
+	// окно — ровно по содержимому: без полос прокрутки и пустого места;
+	// если его растянуть, растут поля текста
+	sz := tabs.MinSize()
+	w.Resize(fyne.NewSize(max(sz.Width, 640), sz.Height))
 	w.ShowAndRun()
 }
 
 // ─── Встраивание ────────────────────────────────────────────────────────────
 
-func embedTab(w fyne.Window) fyne.CanvasObject {
-	var (
-		inPath  string
-		outDir  string
-		cover   *stego.Cover
-		inFmt   imageio.Format
-		textBuf string // текст из файла, если он слишком велик для поля ввода
-	)
-	fileLabel := monoLabel()
-	infoLabel := monoLabel()
-	dirLabel := monoLabel()
-	status := monoLabel()
+type embedTab struct {
+	content fyne.CanvasObject
 
-	textEntry := widget.NewMultiLineEntry()
-	textEntry.SetPlaceHolder("Введите текст")
-	textEntry.Wrapping = fyne.TextWrapWord
-	textScroll := container.NewVScroll(textEntry)
-	textScroll.SetMinSize(fyne.NewSize(200, 180))
+	inPath, outPath string
+	outChosen       bool // путь сохранения выбран вручную
+	cover           *stego.Cover
+	textBuf         string // текст из файла, если он слишком велик для поля ввода
 
-	aadEntry := widget.NewMultiLineEntry()
-	aadEntry.SetPlaceHolder("Введите имитозащищаемые данные (Не обязательно)")
+	fileLabel, outLabel *widget.Label
+	info, status        *widget.Label
+	textEntry           *widget.Entry
+	modeSel, levelSel   *widget.Select
+}
+
+func newEmbedTab() *embedTab {
+	t := &embedTab{
+		fileLabel: pathLabel("Изображение не выбрано — нажмите кнопку или перетащите PNG/BMP на окно"),
+		outLabel:  pathLabel("Куда сохранить — выберется после выбора изображения"),
+	}
+	var infoBox, statusBox fyne.CanvasObject
+	t.info, infoBox = fixedLabel(3)
+	t.status, statusBox = fixedLabel(3)
+
+	t.textEntry = widget.NewMultiLineEntry()
+	t.textEntry.SetPlaceHolder("Введите текст (или перетащите .txt на окно)")
+	t.textEntry.Wrapping = fyne.TextWrapWord
+	t.textEntry.SetMinRowsVisible(6)
+
+	aadEntry := widget.NewEntry()
+	aadEntry.SetPlaceHolder("Введите имитозащищаемые данные (не обязательно)")
 
 	pass := widget.NewPasswordEntry()
 	pass.SetPlaceHolder("Придумайте пароль")
 
-	modeSel := widget.NewSelect(modeNames, nil)
-	modeSel.SetSelected(modeNames[0])
-	levelSel := widget.NewSelect(levelNames, nil)
-	levelSel.SetSelected(levelNames[0])
+	t.modeSel = widget.NewSelect(modeNames, nil)
+	t.modeSel.SetSelected(modeNames[0])
+	t.levelSel = widget.NewSelect(levelNames, nil)
+	t.levelSel.SetSelected(levelNames[0])
 
-	currentText := func() string {
-		if textBuf != "" {
-			return textBuf
-		}
-		return textEntry.Text
-	}
-
-	// сводка: сколько займёт сообщение
-	refresh := func() {
-		if cover == nil {
-			infoLabel.SetText("")
-			return
-		}
-		t := currentText()
-		opt := stego.Options{Mode: modeByName(modeSel.Selected), Level: levelByName(levelSel.Selected)}
-		rep, _, err := stego.Plan(cover, t, opt)
-		switch {
-		case t == "":
-			infoLabel.SetText(fmt.Sprintf("Изображение %d×%d, %s, пригодных элементов: %d.",
-				cover.W, cover.H, map[int]string{1: "оттенки серого", 3: "цветное"}[cover.C], stego.UsableCount(cover)))
-		case err != nil:
-			infoLabel.SetText(err.Error())
-		default:
-			// стрелку «→» шрифт Fyne не содержит — только слова
-			infoLabel.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), с имитовставкой и кодом Рида–Соломона — %d байт. "+
-				"Занято %.2f%% пригодных элементов, на бит сообщения — %d элементов.",
-				rep.Chars, rep.Compressed, rep.Method, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.W))
-		}
-	}
-	textEntry.OnChanged = func(string) { textBuf = ""; refresh() }
-	modeSel.OnChanged = func(string) { refresh() }
-	levelSel.OnChanged = func(string) { refresh() }
+	t.textEntry.OnChanged = func(string) { t.textBuf = ""; t.refresh() }
+	t.modeSel.OnChanged = func(string) { t.refresh() }
+	t.levelSel.OnChanged = func(string) { t.refresh() }
 
 	selectFile := widget.NewButton("Выбрать файл", func() {
 		p, err := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load()
+		if err == nil {
+			t.loadImage(p)
+		}
+	})
+	loadText := widget.NewButton("Загрузить текст из файла", func() {
+		p, err := dialog.File().Filter("Текстовые файлы", "txt").Load()
+		if err == nil {
+			t.loadText(p)
+		}
+	})
+	saveAs := widget.NewButton("Куда сохранить…", func() {
+		b := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Title("Сохранить изображение с сообщением")
+		if t.outPath != "" {
+			b = b.SetStartDir(filepath.Dir(t.outPath)).SetStartFile(filepath.Base(t.outPath))
+		}
+		p, err := b.Save()
 		if err != nil {
 			return // отмена
 		}
-		img, f, err := imageio.Load(p)
-		if err != nil {
-			status.SetText(err.Error())
-			return
+		if !isImage(p) { // расширение не указано или другое — как у исходного
+			ext := ".png"
+			if t.inPath != "" {
+				ext = strings.ToLower(filepath.Ext(t.inPath))
+			}
+			p += ext
 		}
-		inPath, inFmt, cover = p, f, stego.FromImage(img)
-		fileLabel.SetText(p)
-		status.SetText("")
-		refresh()
-	})
-
-	loadText := widget.NewButton("Загрузить текст из файла", func() {
-		p, err := dialog.File().Filter("Текстовые файлы", "txt").Load()
-		if err != nil {
-			return
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			status.SetText("Не удалось прочитать файл: " + err.Error())
-			return
-		}
-		b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}) // метка порядка байтов UTF-8
-		if !utf8.Valid(b) {
-			status.SetText("Файл не в кодировке UTF-8 — сохраните его в UTF-8 и повторите")
-			return
-		}
-		if len(b) <= 200_000 {
-			textEntry.SetText(string(b))
-			textBuf = ""
-		} else {
-			textEntry.SetText(fmt.Sprintf("[текст из файла %s, %d символов — слишком велик для показа]", filepath.Base(p), utf8.RuneCount(b)))
-			textBuf = string(b)
-		}
-		status.SetText("Текст загружен из файла")
-		refresh()
-	})
-
-	selectDir := widget.NewButton("Выбрать директорию сохранения", func() {
-		d, err := dialog.Directory().Title("Выберите директорию").Browse()
-		if err != nil {
-			return
-		}
-		outDir = d
-		dirLabel.SetText(d)
+		t.outPath, t.outChosen = p, true
+		t.outLabel.SetText(showPath("Сохранить в: ", p))
 	})
 
 	var start *widget.Button
 	start = widget.NewButtonWithIcon("Старт", theme.MediaPlayIcon(), func() {
-		text := currentText()
+		text := t.currentText()
 		switch {
-		case cover == nil:
-			status.SetText("Пожалуйста, выберите изображение (PNG или BMP)")
+		case t.cover == nil:
+			t.status.SetText("Выберите изображение (PNG или BMP)")
 			return
 		case text == "":
-			status.SetText("Пожалуйста, введите текст")
+			t.status.SetText("Введите текст")
 			return
 		case pass.Text == "":
-			status.SetText("Пожалуйста, задайте пароль")
+			t.status.SetText("Задайте пароль")
 			return
-		case outDir == "":
-			status.SetText("Пожалуйста, выберите директорию сохранения")
+		case samePath(t.outPath, t.inPath):
+			t.status.SetText("Нельзя сохранять поверх исходного изображения — выберите другое имя («Куда сохранить…»)")
 			return
 		}
-		outPath := freeName(filepath.Join(outDir, "enc_"+filepath.Base(inPath)))
+		outPath := t.outPath
+		if !t.outChosen {
+			outPath = freeName(outPath) // за время работы файл с таким именем мог появиться
+		}
+		format, err := imageio.FormatOf(outPath)
+		if err != nil {
+			t.status.SetText(err.Error())
+			return
+		}
+		cover := t.cover
 		opt := stego.Options{
-			Mode: modeByName(modeSel.Selected), Level: levelByName(levelSel.Selected),
+			Mode: modeByName(t.modeSel.Selected), Level: levelByName(t.levelSel.Selected),
 			Password: pass.Text, AAD: []byte(aadEntry.Text),
 		}
 		lost := alphabet.Normalize(text) != strings.ReplaceAll(text, "\r\n", "\n")
 		start.Disable()
-		status.SetText("Выполняется…")
+		t.status.SetText("Выполняется…")
 		go func() {
 			defer start.Enable()
 			t0 := time.Now()
 			out, rep, err := stego.EmbedCover(cover, text, opt)
 			if err == nil {
-				err = imageio.Save(outPath, out.Image(), inFmt)
+				err = imageio.Save(outPath, out.Image(), format)
 			}
 			if err != nil {
-				status.SetText("Ошибка: " + err.Error())
+				t.status.SetText("Ошибка: " + err.Error())
 				return
 			}
-			msg := fmt.Sprintf("Готово за %.1f с: %s\nИзменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
-				time.Since(t0).Seconds(), outPath, rep.Changes+rep.HeaderChanges,
+			msg := fmt.Sprintf("Готово за %.1f с: сохранено %s. Изменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
+				time.Since(t0).Seconds(), filepath.Base(outPath), rep.Changes+rep.HeaderChanges,
 				100*float64(rep.Changes+rep.HeaderChanges)/float64(rep.Elements), rep.Mode, rep.Level)
 			if lost {
-				msg += "\nПрописные буквы будут извлечены строчными."
+				msg += " Прописные буквы будут извлечены строчными."
 			}
-			status.SetText(msg)
+			t.status.SetText(msg)
+			if !t.outChosen {
+				t.setDefaultOut() // следующий раз — новое имя, без перезаписи
+			}
 		}()
 	})
 
-	return container.NewVScroll(container.NewVBox(
-		selectFile, fileLabel,
-		textScroll,
+	top := container.NewVBox(selectFile, t.fileLabel)
+	bottom := container.NewVBox(
 		aadEntry,
 		loadText,
 		pass,
 		container.NewGridWithColumns(2,
-			container.NewVBox(widget.NewLabel("Шифр"), modeSel),
-			container.NewVBox(widget.NewLabel("Устойчивость к повреждениям"), levelSel),
+			container.NewVBox(widget.NewLabel("Шифр"), t.modeSel),
+			container.NewVBox(widget.NewLabel("Устойчивость к повреждениям"), t.levelSel),
 		),
-		infoLabel,
-		selectDir, dirLabel,
+		infoBox,
+		saveAs, t.outLabel,
 		start,
-		status,
-	))
+		statusBox,
+	)
+	t.content = container.NewBorder(top, bottom, nil, nil, t.textEntry)
+	return t
+}
+
+func (t *embedTab) currentText() string {
+	if t.textBuf != "" {
+		return t.textBuf
+	}
+	return t.textEntry.Text
+}
+
+// refresh — сводка: сколько займёт сообщение.
+func (t *embedTab) refresh() {
+	if t.cover == nil {
+		t.info.SetText("")
+		return
+	}
+	text := t.currentText()
+	opt := stego.Options{Mode: modeByName(t.modeSel.Selected), Level: levelByName(t.levelSel.Selected)}
+	rep, _, err := stego.Plan(t.cover, text, opt)
+	switch {
+	case text == "":
+		t.info.SetText(fmt.Sprintf("Изображение %d×%d, %s, пригодных элементов: %d.",
+			t.cover.W, t.cover.H, map[int]string{1: "оттенки серого", 3: "цветное"}[t.cover.C], stego.UsableCount(t.cover)))
+	case err != nil:
+		t.info.SetText(err.Error())
+	default:
+		// стрелку «→» шрифт Fyne не содержит — только слова
+		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), с имитовставкой и кодом Рида–Соломона — %d байт. "+
+			"Занято %.2f%% пригодных элементов, на бит сообщения — %d элементов.",
+			rep.Chars, rep.Compressed, rep.Method, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.W))
+	}
+}
+
+func (t *embedTab) loadImage(p string) {
+	img, _, err := imageio.Load(p)
+	if err != nil {
+		t.status.SetText(err.Error())
+		return
+	}
+	t.inPath, t.cover = p, stego.FromImage(img)
+	t.fileLabel.SetText(showPath("", p))
+	if !t.outChosen || samePath(t.outPath, t.inPath) {
+		t.setDefaultOut()
+	}
+	t.status.SetText("")
+	t.refresh()
+}
+
+// setDefaultOut — по умолчанию сохранять рядом с исходным: enc_<имя>.
+func (t *embedTab) setDefaultOut() {
+	t.outPath = freeName(filepath.Join(filepath.Dir(t.inPath), "enc_"+filepath.Base(t.inPath)))
+	t.outChosen = false
+	t.outLabel.SetText(showPath("Сохранить в: ", t.outPath))
+}
+
+func (t *embedTab) loadText(p string) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.status.SetText("Не удалось прочитать файл: " + err.Error())
+		return
+	}
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}) // метка порядка байтов UTF-8
+	if !utf8.Valid(b) {
+		t.status.SetText("Файл не в кодировке UTF-8 — сохраните его в UTF-8 и повторите")
+		return
+	}
+	if len(b) <= 200_000 {
+		t.textEntry.SetText(string(b))
+		t.textBuf = ""
+	} else {
+		t.textEntry.SetText(fmt.Sprintf("[текст из файла %s, %d символов — слишком велик для показа]", filepath.Base(p), utf8.RuneCount(b)))
+		t.textBuf = string(b)
+	}
+	t.status.SetText("Текст загружен из файла " + filepath.Base(p))
+	t.refresh()
+}
+
+func (t *embedTab) drop(p string) {
+	switch {
+	case isImage(p):
+		t.loadImage(p)
+	case strings.EqualFold(filepath.Ext(p), ".txt"):
+		t.loadText(p)
+	default:
+		t.status.SetText("Перетащите изображение PNG/BMP или текст .txt")
+	}
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, err1 := filepath.Abs(a)
+	bb, err2 := filepath.Abs(b)
+	return err1 == nil && err2 == nil && strings.EqualFold(aa, bb)
 }
 
 // freeName — путь, не занятый существующим файлом (name, name_1, name_2…).
@@ -273,51 +389,52 @@ func freeName(p string) string {
 
 // ─── Извлечение ─────────────────────────────────────────────────────────────
 
-func extractTab(w fyne.Window) fyne.CanvasObject {
-	var cover *stego.Cover
-	var result string
-	fileLabel := monoLabel()
-	status := monoLabel()
+type extractTab struct {
+	content   fyne.CanvasObject
+	inPath    string
+	cover     *stego.Cover
+	result    string
+	fileLabel *widget.Label
+	status    *widget.Label
+}
 
-	aadEntry := widget.NewMultiLineEntry()
-	aadEntry.SetPlaceHolder("Введите имитозащищаемые данные (Не обязательно)")
+func newExtractTab() *extractTab {
+	t := &extractTab{
+		fileLabel: pathLabel("Изображение не выбрано — нажмите кнопку или перетащите PNG/BMP на окно"),
+	}
+	var statusBox fyne.CanvasObject
+	t.status, statusBox = fixedLabel(3)
+
+	aadEntry := widget.NewEntry()
+	aadEntry.SetPlaceHolder("Введите имитозащищаемые данные (не обязательно)")
 	pass := widget.NewPasswordEntry()
 	pass.SetPlaceHolder("Введите пароль")
 
 	output := widget.NewMultiLineEntry()
 	output.Wrapping = fyne.TextWrapWord
 	output.SetPlaceHolder("Здесь появится извлечённый текст")
-	outScroll := container.NewVScroll(output)
-	outScroll.SetMinSize(fyne.NewSize(200, 260))
+	output.SetMinRowsVisible(6)
 
 	selectFile := widget.NewButton("Выбрать файл", func() {
 		p, err := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load()
-		if err != nil {
-			return
+		if err == nil {
+			t.loadImage(p)
 		}
-		img, _, err := imageio.Load(p)
-		if err != nil {
-			status.SetText(err.Error())
-			return
-		}
-		cover = stego.FromImage(img)
-		fileLabel.SetText(p)
-		status.SetText("")
 	})
 
 	var start *widget.Button
 	start = widget.NewButtonWithIcon("Старт", theme.MediaPlayIcon(), func() {
 		switch {
-		case cover == nil:
-			status.SetText("Пожалуйста, выберите файл")
+		case t.cover == nil:
+			t.status.SetText("Выберите изображение")
 			return
 		case pass.Text == "":
-			status.SetText("Пожалуйста, введите пароль")
+			t.status.SetText("Введите пароль")
 			return
 		}
-		password, aad := pass.Text, []byte(aadEntry.Text)
+		cover, password, aad := t.cover, pass.Text, []byte(aadEntry.Text)
 		start.Disable()
-		status.SetText("Выполняется…")
+		t.status.SetText("Выполняется…")
 		go func() {
 			defer start.Enable()
 			res, err := stego.ExtractCover(cover, password, aad, nil)
@@ -326,49 +443,68 @@ func extractTab(w fyne.Window) fyne.CanvasObject {
 				if res != nil && errors.Is(err, stego.ErrDamaged) {
 					msg += fmt.Sprintf(" (шифр %s, устойчивость — %s)", res.Mode, res.Level)
 				}
-				status.SetText(msg)
+				t.status.SetText(msg)
 				return
 			}
-			result = res.Text
-			if utf8.RuneCountInString(result) <= 200_000 {
-				output.SetText(result)
+			t.result = res.Text
+			if utf8.RuneCountInString(t.result) <= 200_000 {
+				output.SetText(t.result)
 			} else {
 				output.SetText("[текст слишком велик для показа — сохраните его в файл]")
 			}
-			msg := fmt.Sprintf("Готово: %d симв., шифр %s, устойчивость — %s.", utf8.RuneCountInString(result), res.Mode, res.Level)
+			msg := fmt.Sprintf("Готово: %d симв., шифр %s, устойчивость — %s.", utf8.RuneCountInString(t.result), res.Mode, res.Level)
 			if res.Corrected > 0 {
 				msg += fmt.Sprintf(" Исправлено повреждённых байтов: %d.", res.Corrected)
 			}
-			status.SetText(msg)
+			t.status.SetText(msg)
 		}()
 	})
 
 	save := widget.NewButton("Сохранить текст в файл", func() {
-		if result == "" {
-			status.SetText("Сначала извлеките текст")
+		if t.result == "" {
+			t.status.SetText("Сначала извлеките текст")
 			return
 		}
-		p, err := dialog.File().Filter("Текстовые файлы", "txt").Title("Сохранить текст").Save()
+		b := dialog.File().Filter("Текстовые файлы", "txt").Title("Сохранить текст")
+		if t.inPath != "" {
+			name := strings.TrimSuffix(filepath.Base(t.inPath), filepath.Ext(t.inPath)) + ".txt"
+			b = b.SetStartDir(filepath.Dir(t.inPath)).SetStartFile(name)
+		}
+		p, err := b.Save()
 		if err != nil {
 			return
 		}
 		if filepath.Ext(p) == "" {
 			p += ".txt"
 		}
-		if err := os.WriteFile(p, []byte(result), 0o644); err != nil {
-			status.SetText("Не удалось сохранить: " + err.Error())
+		if err := os.WriteFile(p, []byte(t.result), 0o644); err != nil {
+			t.status.SetText("Не удалось сохранить: " + err.Error())
 			return
 		}
-		status.SetText("Текст сохранён: " + p)
+		t.status.SetText("Текст сохранён: " + p)
 	})
 
-	return container.NewVScroll(container.NewVBox(
-		selectFile, fileLabel,
-		aadEntry,
-		pass,
-		start,
-		outScroll,
-		save,
-		status,
-	))
+	top := container.NewVBox(selectFile, t.fileLabel, aadEntry, pass, start)
+	bottom := container.NewVBox(save, statusBox)
+	t.content = container.NewBorder(top, bottom, nil, nil, output)
+	return t
+}
+
+func (t *extractTab) loadImage(p string) {
+	img, _, err := imageio.Load(p)
+	if err != nil {
+		t.status.SetText(err.Error())
+		return
+	}
+	t.inPath, t.cover = p, stego.FromImage(img)
+	t.fileLabel.SetText(showPath("", p))
+	t.status.SetText("")
+}
+
+func (t *extractTab) drop(p string) {
+	if isImage(p) {
+		t.loadImage(p)
+	} else {
+		t.status.SetText("Перетащите изображение PNG или BMP")
+	}
 }
