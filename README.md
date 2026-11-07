@@ -78,7 +78,7 @@ go get github.com/lirprocs/MGM@master
 | Путь | Что |
 |---|---|
 | `cmd/shorthand` | графический интерфейс |
-| `cmd/stegobench` | эксперименты: стегоанализ, устойчивость, шифры, сжатие |
+| `cmd/stegobench` | эксперименты: стегоанализ, устойчивость, шифры, сжатие; встраивание для иллюстраций |
 | `internal/alphabet` | 7-битный алфавит без регистра |
 | `internal/compress` | сжатие: 7 бит, контекстная модель, deflate; корпус |
 | `internal/crypto/kuznyechik`, `magma` | блочные шифры ГОСТ Р 34.12-2015 |
@@ -115,3 +115,11 @@ go run ./cmd/stegobench compress -out results
 
 Фотографии для опытов в репозиторий не входят (обои Windows принадлежат
 Microsoft): `prepare` готовит их из папок на компьютере.
+
+Встроить случайную нагрузку одним из способов стенда (`v3`, `v3h`, `v3m` —
+уровни v3; `pm1` — ±1 без STC; `report` — замена бита R/B; `v2` — 3-2-3) и
+сохранить стегоизображение, например чтобы показать, где меняются пиксели:
+
+```bash
+go run ./cmd/stegobench embed -in photo.png -out stego.png -method v3 -rate 0.05
+```
