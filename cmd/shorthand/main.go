@@ -24,8 +24,10 @@ import (
 	"github.com/sqweek/dialog"
 
 	"github.com/lirprocs/shorthand/internal/alphabet"
+	"github.com/lirprocs/shorthand/internal/crypto/kdf"
 	"github.com/lirprocs/shorthand/internal/crypto/suite"
 	"github.com/lirprocs/shorthand/internal/imageio"
+	"github.com/lirprocs/shorthand/internal/precheck"
 	"github.com/lirprocs/shorthand/internal/stego"
 )
 
@@ -135,10 +137,17 @@ type embedTab struct {
 	cover           *stego.Cover
 	textBuf         string // текст из файла, если он слишком велик для поля ввода
 
+	// этап 1 «на потом»: свойства исходного файла и проверка контейнера
+	meta     *imageio.Meta
+	check    *precheck.Report
+	prepared bool // контейнер уменьшен вдвое кнопкой «Подготовить»
+
 	fileLabel, outLabel *widget.Label
 	info, status        *widget.Label
 	textEntry           *widget.Entry
 	modeSel, levelSel   *widget.Select
+	prepareBtn          *widget.Button
+	keepTime            *widget.Check
 }
 
 func newEmbedTab() *embedTab {
@@ -147,8 +156,13 @@ func newEmbedTab() *embedTab {
 		outLabel:  pathLabel("Куда сохранить — выберется после выбора изображения"),
 	}
 	var infoBox, statusBox fyne.CanvasObject
-	t.info, infoBox = fixedLabel(3)
+	t.info, infoBox = fixedLabel(4)
 	t.status, statusBox = fixedLabel(3)
+
+	t.prepareBtn = widget.NewButton("Подготовить: уменьшить вдвое", func() { t.prepare() })
+	t.prepareBtn.Hide()
+	t.keepTime = widget.NewCheck("Сохранить дату изменения исходного файла", nil)
+	t.keepTime.SetChecked(true)
 
 	t.textEntry = widget.NewMultiLineEntry()
 	t.textEntry.SetPlaceHolder("Введите текст (или перетащите .txt на окно)")
@@ -228,10 +242,11 @@ func newEmbedTab() *embedTab {
 			t.status.SetText(err.Error())
 			return
 		}
-		cover := t.cover
+		cover, meta, keepTime := t.cover, t.meta, t.keepTime.Checked
+		password, aad := pass.Text, []byte(aadEntry.Text)
 		opt := stego.Options{
 			Mode: modeByName(t.modeSel.Selected), Level: levelByName(t.levelSel.Selected),
-			Password: pass.Text, AAD: []byte(aadEntry.Text),
+			Password: password, AAD: aad,
 		}
 		lost := alphabet.Normalize(text) != strings.ReplaceAll(text, "\r\n", "\n")
 		start.Disable()
@@ -239,15 +254,20 @@ func newEmbedTab() *embedTab {
 		go func() {
 			defer start.Enable()
 			t0 := time.Now()
+			// Argon2id — один раз: и для встраивания, и для проверки после записи
+			opt.Master = kdf.Master(password)
 			out, rep, err := stego.EmbedCover(cover, text, opt)
 			if err == nil {
-				err = imageio.Save(outPath, out.Image(), format)
+				err = imageio.SaveLike(outPath, out.Image(), format, meta, keepTime)
+			}
+			if err == nil {
+				err = verifySaved(outPath, password, aad, opt.Master, alphabet.Normalize(text))
 			}
 			if err != nil {
 				t.status.SetText("Ошибка: " + err.Error())
 				return
 			}
-			msg := fmt.Sprintf("Готово за %.1f с: сохранено %s. Изменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
+			msg := fmt.Sprintf("Готово за %.1f с: сохранено и проверено %s. Изменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
 				time.Since(t0).Seconds(), filepath.Base(outPath), rep.Changes+rep.HeaderChanges,
 				100*float64(rep.Changes+rep.HeaderChanges)/float64(rep.Elements), rep.Mode, rep.Level)
 			if lost {
@@ -260,7 +280,9 @@ func newEmbedTab() *embedTab {
 		}()
 	})
 
-	top := container.NewVBox(selectFile, t.fileLabel)
+	// кнопка «Подготовить» — в строке с именем файла: её появление не меняет
+	// высоту окна
+	top := container.NewVBox(selectFile, container.NewBorder(nil, nil, nil, t.prepareBtn, t.fileLabel))
 	bottom := container.NewVBox(
 		aadEntry,
 		loadText,
@@ -271,6 +293,7 @@ func newEmbedTab() *embedTab {
 		),
 		infoBox,
 		saveAs, t.outLabel,
+		t.keepTime,
 		start,
 		statusBox,
 	)
@@ -294,18 +317,66 @@ func (t *embedTab) refresh() {
 	text := t.currentText()
 	opt := stego.Options{Mode: modeByName(t.modeSel.Selected), Level: levelByName(t.levelSel.Selected)}
 	rep, _, err := stego.Plan(t.cover, text, opt)
+	var warn []string
+	if t.check != nil {
+		warn = append(warn, t.check.Warnings...)
+	}
+	if t.meta != nil {
+		warn = append(warn, t.meta.Changes()...)
+	}
+	if t.prepared {
+		warn = append([]string{fmt.Sprintf("изображение уменьшено до %d×%d", t.cover.W, t.cover.H)}, warn...)
+	}
+	warnText := ""
+	if len(warn) > 0 {
+		warnText = " Внимание: " + strings.Join(warn, "; ") + "."
+	}
 	switch {
 	case text == "":
 		t.info.SetText(fmt.Sprintf("Изображение %d×%d, %s, пригодных элементов: %d.",
-			t.cover.W, t.cover.H, map[int]string{1: "оттенки серого", 3: "цветное"}[t.cover.C], stego.UsableCount(t.cover)))
+			t.cover.W, t.cover.H, map[int]string{1: "оттенки серого", 3: "цветное"}[t.cover.C], stego.UsableCount(t.cover)) + warnText)
 	case err != nil:
-		t.info.SetText(err.Error())
+		t.info.SetText(err.Error() + warnText)
 	default:
+		risk, rate := precheck.RiskOf(rep, t.check)
 		// стрелку «→» шрифт Fyne не содержит — только слова
-		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), с имитовставкой и кодом Рида–Соломона — %d байт. "+
-			"Занято %.2f%% пригодных элементов, на бит сообщения — %d элементов.",
-			rep.Chars, rep.Compressed, rep.Method, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.W))
+		t.info.SetText(fmt.Sprintf("Риск обнаружения: %s (%.3f бита на элемент). Текст: %d симв., после сжатия %d байт (%s), "+
+			"с имитовставкой и кодом Рида–Соломона — %d байт; занято %.2f%% пригодных элементов.",
+			risk, rate, rep.Chars, rep.Compressed, rep.Method, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements)) + warnText)
 	}
+}
+
+// prepare уменьшает контейнер вдвое: следы JPEG исчезают.
+func (t *embedTab) prepare() {
+	if t.cover == nil {
+		return
+	}
+	t.cover = precheck.Downscale2(t.cover)
+	t.prepared = true
+	t.check = precheck.Check(t.cover)
+	if !t.check.CanDownscale {
+		t.prepareBtn.Hide()
+	}
+	t.status.SetText(fmt.Sprintf("Изображение уменьшено до %d×%d; исходный файл не изменён.", t.cover.W, t.cover.H))
+	t.refresh()
+}
+
+// verifySaved — проверка после записи: файл открывается заново и сообщение
+// извлекается тем же паролем. Если не совпало — файл удаляется.
+func verifySaved(path, password string, aad, master []byte, want string) error {
+	img, _, err := imageio.Load(path)
+	if err == nil {
+		var res *stego.Extracted
+		res, err = stego.ExtractCover(stego.FromImage(img), password, aad, master)
+		if err == nil && res.Text != want {
+			err = errors.New("извлечён другой текст")
+		}
+	}
+	if err != nil {
+		os.Remove(path)
+		return fmt.Errorf("проверка после сохранения не прошла (%v) — файл удалён, попробуйте ещё раз или другое изображение", err)
+	}
+	return nil
 }
 
 func (t *embedTab) loadImage(p string) {
@@ -314,7 +385,19 @@ func (t *embedTab) loadImage(p string) {
 		t.status.SetText(err.Error())
 		return
 	}
-	t.inPath, t.cover = p, stego.FromImage(img)
+	meta, err := imageio.Inspect(p)
+	if err != nil {
+		t.status.SetText(err.Error())
+		return
+	}
+	cover := stego.FromImage(img)
+	t.inPath, t.cover, t.meta, t.prepared = p, cover, meta, false
+	t.check = precheck.Check(cover) // доли секунды
+	if t.check.CanDownscale {
+		t.prepareBtn.Show()
+	} else {
+		t.prepareBtn.Hide()
+	}
 	t.fileLabel.SetText(showPath("", p))
 	if !t.outChosen || samePath(t.outPath, t.inPath) {
 		t.setDefaultOut()
@@ -323,9 +406,11 @@ func (t *embedTab) loadImage(p string) {
 	t.refresh()
 }
 
-// setDefaultOut — по умолчанию сохранять рядом с исходным: enc_<имя>.
+// setDefaultOut — по умолчанию сохранять рядом с исходным под тем же именем
+// с номером (<имя>_1.png): приставка вроде «enc_» сама выдала бы, что с
+// файлом что-то делали.
 func (t *embedTab) setDefaultOut() {
-	t.outPath = freeName(filepath.Join(filepath.Dir(t.inPath), "enc_"+filepath.Base(t.inPath)))
+	t.outPath = freeName(t.inPath)
 	t.outChosen = false
 	t.outLabel.SetText(showPath("Сохранить в: ", t.outPath))
 }

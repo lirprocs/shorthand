@@ -40,8 +40,12 @@ func TestDrop(t *testing.T) {
 	if emb.cover == nil || emb.inPath != img {
 		t.Fatal("изображение не принято")
 	}
-	if want := filepath.Join(dir, "enc_фото.png"); emb.outPath != want || emb.outChosen {
+	// без приставки «enc_»: то же имя с номером (этап 1, ветка later/stage1)
+	if want := filepath.Join(dir, "фото_1.png"); emb.outPath != want || emb.outChosen {
 		t.Fatalf("путь сохранения %q, ожидался %q", emb.outPath, want)
+	}
+	if emb.meta == nil || emb.check == nil {
+		t.Fatal("нет проверки контейнера")
 	}
 	if !strings.HasPrefix(emb.fileLabel.Text, "фото.png") {
 		t.Fatalf("подпись файла: %q", emb.fileLabel.Text)
@@ -85,6 +89,25 @@ func TestLayoutStable(t *testing.T) {
 	ext.status.SetText(strings.Repeat("Длинное сообщение об ошибке. ", 30))
 	if after := tabs.MinSize(); after != before {
 		t.Fatalf("минимальный размер изменился: %v → %v", before, after)
+	}
+	// кнопка «Подготовить» появляется в строке файла — высота та же
+	emb.prepareBtn.Show()
+	if after := tabs.MinSize(); after.Height != before.Height {
+		t.Fatalf("высота изменилась при показе «Подготовить»: %v → %v", before, after)
+	}
+}
+
+// Проверка после записи ловит испорченный файл и удаляет его.
+func TestVerifySaved(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.png")
+	writeTestPNG(t, p) // сообщения в нём нет
+	err := verifySaved(p, "пароль", nil, make([]byte, 32), "текст")
+	if err == nil {
+		t.Fatal("пустое изображение прошло проверку")
+	}
+	if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+		t.Fatal("файл после неудачной проверки не удалён")
 	}
 }
 

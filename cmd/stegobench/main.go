@@ -7,6 +7,7 @@
 //	stegobench ciphers -out results
 //	stegobench compress -out results [-text файл.txt]
 //	stegobench embed -in контейнер.png -out стего.png -method v3|v3h|v3m|pm1|report|v2 -rate 0.05
+//	stegobench precheck -data папка1,папка2 -out results   (этап 1, на потом: проверка контейнеров)
 package main
 
 import (
@@ -35,6 +36,7 @@ import (
 	"github.com/lirprocs/shorthand/internal/compress"
 	"github.com/lirprocs/shorthand/internal/crypto/suite"
 	"github.com/lirprocs/shorthand/internal/imageio"
+	"github.com/lirprocs/shorthand/internal/precheck"
 	"github.com/lirprocs/shorthand/internal/stego"
 )
 
@@ -68,6 +70,8 @@ func main() {
 		err = prepare(strings.Split(*src, ","), *out, *scale, *tile)
 	case "detect":
 		err = detect(*data, *out)
+	case "precheck":
+		err = precheckReport(strings.Split(*data, ","), *out)
 	case "robust":
 		err = robust(*data, *out)
 	case "ciphers":
@@ -711,4 +715,43 @@ func compressReport(out, extra string) error {
 		fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %d | %s | %.2f |\n", n, len(t), gz.Len(), p, c, d, m, 8*float64(len(best))/float64(n))
 	}
 	return writeReport(out, "compress.md", b.String())
+}
+
+// ─── проверка контейнеров (этап 1, на потом) ────────────────────────────────
+
+// precheckReport — оценки следов JPEG и текстуры для всех PNG/BMP из папок:
+// по ним подобраны пороги precheck.JPEGThreshold и TextureThreshold.
+func precheckReport(dirs []string, out string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Проверка контейнеров\n\nПорог следов JPEG — %.2f, порог текстуры — %.2f.\n\n", precheck.JPEGThreshold, precheck.TextureThreshold)
+	fmt.Fprintf(&b, "| Папка | Файл | Размер | Следы JPEG | Шаг q | Текстура | Время, мс | Вывод |\n|---|---|---|---|---|---|---|---|\n")
+	for _, dir := range dirs {
+		files, _ := filepath.Glob(filepath.Join(strings.TrimSpace(dir), "*"))
+		sort.Strings(files)
+		for _, f := range files {
+			if _, err := imageio.FormatOf(f); err != nil {
+				continue
+			}
+			img, _, err := imageio.Load(f)
+			if err != nil {
+				return err
+			}
+			cv := stego.FromImage(img)
+			t0 := time.Now()
+			r := precheck.Check(cv)
+			ms := time.Since(t0).Milliseconds()
+			verdict := "годится"
+			switch {
+			case r.JPEG && r.LowTexture:
+				verdict = "JPEG, мало текстуры"
+			case r.JPEG:
+				verdict = "был JPEG"
+			case r.LowTexture:
+				verdict = "мало текстуры"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %d×%d | %.3f | %d | %.2f | %d | %s |\n",
+				filepath.Base(dir), filepath.Base(f), cv.W, cv.H, r.JPEGScore, r.JPEGQ, r.Texture, ms, verdict)
+		}
+	}
+	return writeReport(out, "precheck.md", b.String())
 }
