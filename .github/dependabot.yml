@@ -1,0 +1,12 @@
+# Раз в месяц Dependabot открывает pull request'ы с новыми версиями модулей Go
+# и действий GitHub. Вливает владелец после зелёных проверок.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
