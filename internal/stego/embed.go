@@ -122,9 +122,13 @@ func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
 }
 
 // positions — первые count пригодных элементов в порядке перестановки.
+// Если столько элементов в изображении нет, память под них не запрашивается.
 func positions(p *Perm, c *Cover, count int) ([]int, bool) {
-	out := make([]int, 0, count)
 	n := c.Len()
+	if count < 0 || count > n {
+		return nil, false
+	}
+	out := make([]int, 0, count)
 	for j := 0; j < n && len(out) < count; j++ {
 		e := p.At(j)
 		if c.Usable(e) {
@@ -374,6 +378,11 @@ search:
 	coded := rs.CodedLen(hdr.Length, parity)
 	msgBits := 8 * coded
 	need := style.elems() + msgBits*hdr.W
+	// длина из заголовка может быть любой (до 2²⁸ байт): сначала сверить с
+	// размером изображения, потом выделять память
+	if need > usableCount(cv) {
+		return &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, H: hdr.H, W: hdr.W}, ErrDamaged
+	}
 	pos, ok := positions(perm, cv, need)
 	if !ok {
 		return nil, ErrDamaged
