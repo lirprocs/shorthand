@@ -168,12 +168,6 @@ func (k keys) perm(m suite.Mode, n int) *Perm {
 	return NewPerm(m.NewRand(kdf.Derive(k.master, nil, infoPerm(m), 32)), n)
 }
 
-func (k keys) headerMask(m suite.Mode) []byte {
-	mask := make([]byte, styleRobust.coded())
-	m.NewRand(kdf.Derive(k.master, nil, infoHeader(m), 32)).Read(mask)
-	return mask
-}
-
 // change меняет элемент на ±1 так, чтобы младший бит стал bit.
 func change(c *Cover, e int, bit uint8, signs *prng.Rand) bool {
 	v := c.Pix[e]
@@ -215,21 +209,22 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 		k.master = kdf.Master(opt.Password)
 	}
 
-	// заголовок и шифрование
-	var nonce [16]byte
+	// заголовок и шифрование. R — 16 случайных байт сообщения: соль ключей и
+	// основа nonce шифра; случайны все 16 при любом режиме, чтобы в
+	// заголовке не было постоянных битов
+	var nonce [saltLen]byte
 	if opt.Nonce != nil {
 		copy(nonce[:], opt.Nonce)
-	} else if _, err := rand.Read(nonce[:mode.NonceSize()]); err != nil {
+	} else if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, rep, err
 	}
-	nonce[0] &= 0x7f // для MGM nonce — n−1 бит
-	hdr := Header{Mode: mode, Method: rep.Method, Level: opt.Level, H: rep.H, W: rep.W, Length: rep.Ciphertext, Nonce: nonce}
+	hdr := Header{Version: formatVersion, Mode: mode, Method: rep.Method, Level: opt.Level, H: rep.H, W: rep.W, Length: rep.Ciphertext, Nonce: nonce}
 	hb := hdr.Marshal()
 	aead, err := mode.NewAEAD(kdf.Derive(k.master, nonce[:], infoAEAD(mode), mode.KeySize()))
 	if err != nil {
 		return nil, rep, err
 	}
-	ct := aead.Seal(nil, nonce[:mode.NonceSize()], comp, append(append([]byte(nil), hb...), opt.AAD...))
+	ct := aead.Seal(nil, hdr.aeadNonce(), comp, append(append([]byte(nil), hb...), opt.AAD...))
 	coded := rs.EncodeStream(ct, lp.RS)
 	msg := toBits(coded)
 
@@ -253,28 +248,17 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 		return n
 	}
 
-	// заголовок
+	// заголовок: поля под маской от R, код RS, STC — как у сообщения
 	style := styleFor(opt.Level)
-	hc := rs.Encode(hb, style.parity)
-	mask := k.headerMask(mode)
-	for i := range hc {
-		hc[i] ^= mask[i]
-	}
-	hbits := toBits(hc)
+	masked := append([]byte(nil), hb...)
+	maskFields(masked, k.master, mode)
+	hbits := toBits(rs.Encode(masked, style.parity))
 	hpos := pos[:style.elems()]
-	if style.repeat > 0 {
-		y := make([]uint8, len(hpos))
-		for i := range y {
-			y[i] = hbits[i%len(hbits)]
-		}
-		rep.HeaderChanges = apply(hpos, y)
-	} else {
-		y, _, err := stcEmbed(lsbs(cv, hpos), rho[:len(hpos)], hbits, style.h, style.w)
-		if err != nil {
-			return nil, rep, err
-		}
-		rep.HeaderChanges = apply(hpos, y)
+	hy, _, err := stcEmbed(lsbs(cv, hpos), rho[:len(hpos)], hbits, style.h, style.w)
+	if err != nil {
+		return nil, rep, err
 	}
+	rep.HeaderChanges = apply(hpos, hy)
 
 	// сообщение
 	pay := pos[len(hpos):]
@@ -294,15 +278,16 @@ func lsbs(c *Cover, pos []int) []uint8 {
 	return x
 }
 
-// readHeader пытается прочитать заголовок способом style.
-func readHeader(cv *Cover, p *Perm, style headerStyle, mask []byte) (*Header, []byte, bool) {
+// readHeader пытается прочитать заголовок способом style. Возвращает поля и
+// 26 байт заголовка без маски — дополнительные данные шифра.
+func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode) (*Header, []byte, bool) {
 	pos, ok := positions(p, cv, style.elems())
 	if !ok {
 		return nil, nil, false
 	}
 	nb := style.bits()
 	var bits []uint8
-	if style.repeat > 0 {
+	if style.repeat > 0 { // версия 3: большинство из повторов
 		bits = make([]uint8, nb)
 		for b := range bits {
 			votes := 0
@@ -317,17 +302,34 @@ func readHeader(cv *Cover, p *Perm, style headerStyle, mask []byte) (*Header, []
 		bits = stcExtract(lsbs(cv, pos), nb, style.h, style.w)
 	}
 	hc := fromBits(bits)
-	for i := range hc {
-		hc[i] ^= mask[i]
+	if style.version == 3 {
+		for i, m := range k.headerMaskV3(mode)[:len(hc)] {
+			hc[i] ^= m
+		}
 	}
 	if _, err := rs.Decode(hc, style.parity, nil); err != nil {
 		return nil, nil, false
 	}
-	h, err := parseHeader(hc[:headerLen])
-	if err != nil || styleFor(h.Level) != style {
+	hb := hc[:headerLen]
+	var (
+		h    *Header
+		err  error
+		want headerStyle
+	)
+	if style.version == 3 {
+		if h, err = parseHeaderV3(hb); err == nil {
+			want = styleForV3(h.Level)
+		}
+	} else {
+		maskFields(hb, k.master, mode)
+		if h, err = parseHeader(hb); err == nil {
+			want = styleFor(h.Level)
+		}
+	}
+	if err != nil || want != style || h.Mode != mode {
 		return nil, nil, false
 	}
-	return h, hc[:headerLen], true
+	return h, hb, true
 }
 
 // Extracted — результат извлечения.
@@ -361,9 +363,8 @@ func ExtractCover(cv *Cover, password string, aad, master []byte) (*Extracted, e
 search:
 	for _, mode := range suite.All {
 		p := k.perm(mode, cv.Len())
-		mask := k.headerMask(mode)
 		for _, st := range headerStyles {
-			if h, b, ok := readHeader(cv, p, st, mask); ok && h.Mode == mode {
+			if h, b, ok := readHeader(cv, p, st, k, mode); ok {
 				hdr, hb, perm, style = h, b, p, st
 				break search
 			}
@@ -402,7 +403,7 @@ search:
 		if err != nil {
 			return nil, 0, ErrDamaged
 		}
-		pt, err := aead.Open(nil, hdr.Nonce[:mode.NonceSize()], ct, ad)
+		pt, err := aead.Open(nil, hdr.aeadNonce(), ct, ad)
 		if err != nil {
 			if st.Corrected == 0 {
 				return nil, 0, ErrAuth
