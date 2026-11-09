@@ -78,13 +78,8 @@ go vet ./...
 go test ./internal/...
 ```
 
-Библиотека MGM подключена с коммита `acbc726` ветки `fix-counters-length`
-(исправления в [lirprocs/MGM](https://github.com/lirprocs/MGM), PR). После
-вливания PR — перейти на `master`:
-
-```bash
-go get github.com/lirprocs/MGM@master
-```
+Библиотека MGM — [lirprocs/MGM](https://github.com/lirprocs/MGM), ветка `master`
+(коммит `5849956`, с исправлениями счётчиков и имитовставки из PR #1).
 
 ## Структура
 
