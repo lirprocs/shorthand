@@ -84,6 +84,19 @@ func fixedLabel(lines int) (*widget.Label, fyne.CanvasObject) {
 	return l, s
 }
 
+// pick показывает системное окно выбора файла и передаёт выбранный путь в
+// use. Окно выбора блокирует вызвавший поток, пока его не закроют, а
+// обработчики кнопок Fyne (с версии 2.6) выполняются в потоке интерфейса,
+// поэтому окно открывается в отдельной горутине, а результат возвращается
+// в поток интерфейса через fyne.Do. Отмена — ничего не происходит.
+func pick(open func() (string, error), use func(p string)) {
+	go func() {
+		if p, err := open(); err == nil {
+			fyne.Do(func() { use(p) })
+		}
+	}()
+}
+
 func isImage(p string) bool {
 	_, err := imageio.FormatOf(p)
 	return err == nil
@@ -171,35 +184,27 @@ func newEmbedTab() *embedTab {
 	t.levelSel.OnChanged = func(string) { t.refresh() }
 
 	selectFile := widget.NewButton("Выбрать файл", func() {
-		p, err := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load()
-		if err == nil {
-			t.loadImage(p)
-		}
+		pick(dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load, t.loadImage)
 	})
 	loadText := widget.NewButton("Загрузить текст из файла", func() {
-		p, err := dialog.File().Filter("Текстовые файлы", "txt").Load()
-		if err == nil {
-			t.loadText(p)
-		}
+		pick(dialog.File().Filter("Текстовые файлы", "txt").Load, t.loadText)
 	})
 	saveAs := widget.NewButton("Куда сохранить…", func() {
 		b := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Title("Сохранить изображение с сообщением")
 		if t.outPath != "" {
 			b = b.SetStartDir(filepath.Dir(t.outPath)).SetStartFile(filepath.Base(t.outPath))
 		}
-		p, err := b.Save()
-		if err != nil {
-			return // отмена
-		}
-		if !isImage(p) { // расширение не указано или другое — как у исходного
-			ext := ".png"
-			if t.inPath != "" {
-				ext = strings.ToLower(filepath.Ext(t.inPath))
+		pick(b.Save, func(p string) {
+			if !isImage(p) { // расширение не указано или другое — как у исходного
+				ext := ".png"
+				if t.inPath != "" {
+					ext = strings.ToLower(filepath.Ext(t.inPath))
+				}
+				p += ext
 			}
-			p += ext
-		}
-		t.outPath, t.outChosen = p, true
-		t.outLabel.SetText(showPath("Сохранить в: ", p))
+			t.outPath, t.outChosen = p, true
+			t.outLabel.SetText(showPath("Сохранить в: ", p))
+		})
 	})
 
 	var start *widget.Button
@@ -237,26 +242,29 @@ func newEmbedTab() *embedTab {
 		start.Disable()
 		t.status.SetText("Выполняется…")
 		go func() {
-			defer start.Enable()
 			t0 := time.Now()
 			out, rep, err := stego.EmbedCover(cover, text, opt)
 			if err == nil {
 				err = imageio.Save(outPath, out.Image(), format)
 			}
-			if err != nil {
-				t.status.SetText("Ошибка: " + err.Error())
-				return
-			}
-			msg := fmt.Sprintf("Готово за %.1f с: сохранено %s. Изменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
-				time.Since(t0).Seconds(), filepath.Base(outPath), rep.Changes+rep.HeaderChanges,
-				100*float64(rep.Changes+rep.HeaderChanges)/float64(rep.Elements), rep.Mode, rep.Level)
-			if lost {
-				msg += " Прописные буквы будут извлечены строчными."
-			}
-			t.status.SetText(msg)
-			if !t.outChosen {
-				t.setDefaultOut() // следующий раз — новое имя, без перезаписи
-			}
+			took := time.Since(t0).Seconds()
+			fyne.Do(func() { // виджеты меняются только в потоке интерфейса
+				defer start.Enable()
+				if err != nil {
+					t.status.SetText("Ошибка: " + err.Error())
+					return
+				}
+				msg := fmt.Sprintf("Готово за %.1f с: сохранено %s. Изменено элементов: %d (%.3f%%), шифр %s, устойчивость — %s.",
+					took, filepath.Base(outPath), rep.Changes+rep.HeaderChanges,
+					100*float64(rep.Changes+rep.HeaderChanges)/float64(rep.Elements), rep.Mode, rep.Level)
+				if lost {
+					msg += " Прописные буквы будут извлечены строчными."
+				}
+				t.status.SetText(msg)
+				if !t.outChosen {
+					t.setDefaultOut() // следующий раз — новое имя, без перезаписи
+				}
+			})
 		}()
 	})
 
@@ -416,10 +424,7 @@ func newExtractTab() *extractTab {
 	output.SetMinRowsVisible(6)
 
 	selectFile := widget.NewButton("Выбрать файл", func() {
-		p, err := dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load()
-		if err == nil {
-			t.loadImage(p)
-		}
+		pick(dialog.File().Filter("Изображения PNG и BMP", "png", "bmp").Load, t.loadImage)
 	})
 
 	var start *widget.Button
@@ -436,27 +441,29 @@ func newExtractTab() *extractTab {
 		start.Disable()
 		t.status.SetText("Выполняется…")
 		go func() {
-			defer start.Enable()
 			res, err := stego.ExtractCover(cover, password, aad, nil)
-			if err != nil {
-				msg := "Ошибка: " + err.Error()
-				if res != nil && errors.Is(err, stego.ErrDamaged) {
-					msg += fmt.Sprintf(" (шифр %s, устойчивость — %s)", res.Mode, res.Level)
+			fyne.Do(func() { // виджеты меняются только в потоке интерфейса
+				defer start.Enable()
+				if err != nil {
+					msg := "Ошибка: " + err.Error()
+					if res != nil && errors.Is(err, stego.ErrDamaged) {
+						msg += fmt.Sprintf(" (шифр %s, устойчивость — %s)", res.Mode, res.Level)
+					}
+					t.status.SetText(msg)
+					return
+				}
+				t.result = res.Text
+				if utf8.RuneCountInString(t.result) <= 200_000 {
+					output.SetText(t.result)
+				} else {
+					output.SetText("[текст слишком велик для показа — сохраните его в файл]")
+				}
+				msg := fmt.Sprintf("Готово: %d симв., шифр %s, устойчивость — %s.", utf8.RuneCountInString(t.result), res.Mode, res.Level)
+				if res.Corrected > 0 {
+					msg += fmt.Sprintf(" Исправлено повреждённых байтов: %d.", res.Corrected)
 				}
 				t.status.SetText(msg)
-				return
-			}
-			t.result = res.Text
-			if utf8.RuneCountInString(t.result) <= 200_000 {
-				output.SetText(t.result)
-			} else {
-				output.SetText("[текст слишком велик для показа — сохраните его в файл]")
-			}
-			msg := fmt.Sprintf("Готово: %d симв., шифр %s, устойчивость — %s.", utf8.RuneCountInString(t.result), res.Mode, res.Level)
-			if res.Corrected > 0 {
-				msg += fmt.Sprintf(" Исправлено повреждённых байтов: %d.", res.Corrected)
-			}
-			t.status.SetText(msg)
+			})
 		}()
 	})
 
@@ -470,18 +477,16 @@ func newExtractTab() *extractTab {
 			name := strings.TrimSuffix(filepath.Base(t.inPath), filepath.Ext(t.inPath)) + ".txt"
 			b = b.SetStartDir(filepath.Dir(t.inPath)).SetStartFile(name)
 		}
-		p, err := b.Save()
-		if err != nil {
-			return
-		}
-		if filepath.Ext(p) == "" {
-			p += ".txt"
-		}
-		if err := os.WriteFile(p, []byte(t.result), 0o644); err != nil {
-			t.status.SetText("Не удалось сохранить: " + err.Error())
-			return
-		}
-		t.status.SetText("Текст сохранён: " + p)
+		pick(b.Save, func(p string) {
+			if filepath.Ext(p) == "" {
+				p += ".txt"
+			}
+			if err := os.WriteFile(p, []byte(t.result), 0o644); err != nil {
+				t.status.SetText("Не удалось сохранить: " + err.Error())
+				return
+			}
+			t.status.SetText("Текст сохранён: " + p)
+		})
 	})
 
 	top := container.NewVBox(selectFile, t.fileLabel, aadEntry, pass, start)
