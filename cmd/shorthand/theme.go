@@ -41,6 +41,13 @@ func (darkTheme) Size(n fyne.ThemeSizeName) float32       { return theme.Default
 // useDarkTheme включает тёмную тему, а после появления окна — тёмный
 // заголовок и значки точного размера (decorateWindow, только Windows):
 // попытки каждые 100 мс до 10 с, пока всё не удержится.
+//
+// Fyne красит заголовок по настройке Windows «Режим приложения по умолчанию»
+// не только при создании окна, но и при каждой смене настроек (тема Windows,
+// масштаб, файл настроек Fyne). Поэтому после каждой такой смены заголовок
+// проверяется ещё 3 с и при необходимости перекрашивается обратно. Проверка
+// не прекращается на первом успехе: слушатель программы вызывается раньше
+// слушателя Fyne, и в этот момент заголовок ещё тёмный.
 func useDarkTheme(a fyne.App, title string) {
 	a.Settings().SetTheme(darkTheme{})
 	go func() {
@@ -51,4 +58,12 @@ func useDarkTheme(a fyne.App, title string) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
+	a.Settings().AddListener(func(fyne.Settings) {
+		go func() {
+			for i := 0; i < 30; i++ {
+				time.Sleep(100 * time.Millisecond)
+				decorateWindow(title)
+			}
+		}()
+	})
 }
