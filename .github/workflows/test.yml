@@ -2,7 +2,7 @@ name: Проверки
 
 on:
   push:
-    branches: [master, v3]
+    branches: [master, v3, v3.1]
   pull_request:
 
 permissions:
@@ -17,8 +17,37 @@ jobs:
         with:
           go-version-file: go.mod
       # Графический интерфейс (cmd/shorthand) требует cgo и библиотек X11 —
-      # он собирается на Windows; здесь проверяются ядро и стенд экспериментов.
+      # он собирается на Windows (задание gui); здесь проверяются ядро и стенд
+      # экспериментов.
       - name: go vet
         run: go vet ./internal/... ./cmd/stegobench/...
       - name: go test
         run: go test -count=1 ./internal/...
+
+  # Окно программы: проверки, тесты и сборка под Windows (cgo, MinGW из образа).
+  gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./cmd/shorthand/...
+      - name: go test
+        run: go test -count=1 ./cmd/shorthand/...
+      - name: Сборка
+        run: go build -ldflags "-H=windowsgui" -o shorthand.exe ./cmd/shorthand
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash shorthand.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  shorthand.exe" | Out-File -Encoding ascii shorthand.exe.sha256
+          Get-Content shorthand.exe.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shorthand-windows
+          path: |
+            shorthand.exe
+            shorthand.exe.sha256
+          if-no-files-found: error

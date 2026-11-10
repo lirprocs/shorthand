@@ -6,6 +6,7 @@
 //	stegobench robust  -data data/full  -out results
 //	stegobench ciphers -out results
 //	stegobench compress -out results [-text файл.txt]
+//	stegobench embed -in контейнер.png -out стего.png -method v3|v3h|v3m|pm1|report|v2 -rate 0.05
 package main
 
 import (
@@ -52,10 +53,17 @@ func main() {
 	scale := fs.Int("scale", 2, "уменьшение фотографий (prepare)")
 	tile := fs.Int("tile", 256, "размер фрагментов (prepare)")
 	textFile := fs.String("text", "", "дополнительный текст (compress)")
+	in := fs.String("in", "", "контейнер PNG/BMP (embed)")
+	meth := fs.String("method", "v3", "способ встраивания (embed)")
+	rate := fs.Float64("rate", 0.05, "нагрузка, бит на элемент (embed)")
 	fs.Parse(args)
-	os.MkdirAll(*out, 0o755)
+	if cmd != "embed" {
+		os.MkdirAll(*out, 0o755)
+	}
 	var err error
 	switch cmd {
+	case "embed":
+		err = embedFile(*in, *out, *meth, *rate)
 	case "prepare":
 		err = prepare(strings.Split(*src, ","), *out, *scale, *tile)
 	case "detect":
@@ -272,6 +280,31 @@ func embedV3(level stego.Level, h, maxW int) func(*stego.Cover, int, *rand.Rand)
 		}
 		return out, rep.Changes + rep.HeaderChanges, nil
 	}
+}
+
+// embedFile встраивает случайную нагрузку заданным способом и сохраняет
+// результат — для рисунков (где именно меняются пиксели).
+func embedFile(in, out, name string, rate float64) error {
+	byName := map[string]func(*stego.Cover, int, *rand.Rand) (*stego.Cover, int, error){
+		"v2": embedV2, "report": embedReportLSB, "pm1": embedMatching,
+		"v3": embedV3(stego.LevelNormal, 0, 0), "v3h": embedV3(stego.LevelHigh, 0, 0), "v3m": embedV3(stego.LevelMax, 0, 0),
+	}
+	f, ok := byName[name]
+	if !ok {
+		return fmt.Errorf("неизвестный способ %q", name)
+	}
+	img, format, err := imageio.Load(in)
+	if err != nil {
+		return err
+	}
+	cv := stego.FromImage(img)
+	st, changes, err := f(cv, int(rate*float64(cv.Len())), rand.New(rand.NewSource(1)))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: %d×%d, нагрузка %.3f бит на элемент, изменено %d элементов (%.3f%%)\n",
+		name, cv.W, cv.H, rate, changes, 100*float64(changes)/float64(cv.Len()))
+	return imageio.Save(out, st.Image(), format)
 }
 
 var methods = []method{

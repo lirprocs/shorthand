@@ -163,7 +163,8 @@ func TestTransparentPixels(t *testing.T) {
 }
 
 func TestCapacity(t *testing.T) {
-	cv := FromImage(testImage(40, 30, 5, false))
+	// 24×18×3 = 1296 элементов: заголовок (720) помещается, сообщение — нет
+	cv := FromImage(testImage(24, 18, 5, false))
 	_, _, err := EmbedCover(cv, longText+longText+longText, Options{Mode: suite.KuznyechikMGM, Level: LevelMax, Master: testMaster})
 	var ce *CapacityError
 	if !errors.As(err, &ce) {

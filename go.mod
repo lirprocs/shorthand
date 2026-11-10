@@ -6,7 +6,7 @@ require github.com/lirprocs/Kuznyechik v0.0.0-20250322221820-7703e70b67ba
 
 require (
 	fyne.io/fyne/v2 v2.4.3
-	github.com/lirprocs/MGM v0.0.0-20261106234213-acbc7262b675
+	github.com/lirprocs/MGM v0.0.0-20261106234513-5849956d30a3
 	github.com/sqweek/dialog v0.0.0-20220809060634-e981b270ebbf
 	golang.org/x/image v0.47.0
 )
