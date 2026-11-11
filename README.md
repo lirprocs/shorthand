@@ -116,6 +116,28 @@ go vet ./...
 go test ./...
 ```
 
+Что защищает формат от случайной правки:
+
+- `internal/stego/testdata/v4_*.png` — эталонные изображения нынешнего формата
+  (заголовок версии 4; три шифра, три уровня, цветные и серые): тест
+  `TestReadsV4Images` обязан их прочитать. `v3_*.png` — то же для прежнего
+  заголовка. Пересоздавать эталоны только при намеренной смене формата
+  (`SHORTHAND_WRITE_GOLDEN=1`, описание — в `golden_v4_test.go`);
+- `internal/crypto/prng` — первые 32 байта потока генератора каждого режима
+  закреплены (`TestStreamFrozen`): от потока зависят позиции и знаки.
+
+Фаззинг (в обычный `go test` входят только сохранённые примеры; искать новые —
+по одной цели, время задаётся):
+
+```bash
+go test -run '^$' -fuzz '^FuzzTextRoundTrip$' -fuzztime 1m ./internal/compress
+```
+
+Цели: `FuzzTextRoundTrip`, `FuzzDecompressNoPanic` (`internal/compress`);
+`FuzzDecode`, `FuzzStreamRoundTrip`, `FuzzDecodeStreamNoPanic` (`internal/ecc/rs`);
+`FuzzParseHeader`, `FuzzExtractNoPanic` (`internal/stego`). 11.11.2026 каждая
+отработала 40 с без сбоев.
+
 На GitHub те же проверки выполняет workflow «Проверки»
 (`.github/workflows/test.yml`): задание `test` (Linux — ядро и стенд) и задание
 `gui` (Windows — окно: `go vet`, тесты, сборка `shorthand.exe` и его SHA-256
