@@ -266,14 +266,16 @@ func embedMatching(cv *stego.Cover, bits int, rng *rand.Rand) (*stego.Cover, int
 	return out, changes, nil
 }
 
-func embedV3(level stego.Level, h, maxW int) func(*stego.Cover, int, *rand.Rand) (*stego.Cover, int, error) {
+// embedV3 — встраивание программой на уровне level; h, maxW (STC) или ham (код
+// Хэмминга) заменяют способ записи сообщения уровня, нули — способ уровня.
+func embedV3(level stego.Level, h, maxW, ham int) func(*stego.Cover, int, *rand.Rand) (*stego.Cover, int, error) {
 	return func(cv *stego.Cover, bits int, rng *rand.Rand) (*stego.Cover, int, error) {
 		raw := make([]byte, max(1, bits/8-16)) // шифротекст ≈ bits/8 байт вместе с имитовставкой
 		rng.Read(raw)
 		nonce := make([]byte, 16)
 		rng.Read(nonce)
 		out, rep, err := stego.EmbedCover(cv, "", stego.Options{
-			Mode: suite.KuznyechikMGM, Level: level, Master: master, Nonce: nonce, Raw: raw, H: h, MaxW: maxW,
+			Mode: suite.KuznyechikMGM, Level: level, Master: master, Nonce: nonce, Raw: raw, H: h, MaxW: maxW, Ham: ham,
 		})
 		if err != nil {
 			return nil, 0, err
@@ -287,7 +289,7 @@ func embedV3(level stego.Level, h, maxW int) func(*stego.Cover, int, *rand.Rand)
 func embedFile(in, out, name string, rate float64) error {
 	byName := map[string]func(*stego.Cover, int, *rand.Rand) (*stego.Cover, int, error){
 		"v2": embedV2, "report": embedReportLSB, "pm1": embedMatching,
-		"v3": embedV3(stego.LevelNormal, 0, 0), "v3h": embedV3(stego.LevelHigh, 0, 0), "v3m": embedV3(stego.LevelMax, 0, 0),
+		"v3": embedV3(stego.LevelNormal, 0, 0, 0), "v3h": embedV3(stego.LevelHigh, 0, 0, 0), "v3m": embedV3(stego.LevelMax, 0, 0, 0),
 	}
 	f, ok := byName[name]
 	if !ok {
@@ -311,9 +313,13 @@ var methods = []method{
 	{"v2: 3-2-3, замена", embedV2},
 	{"записка: R/B, замена", embedReportLSB},
 	{"±1 без STC", embedMatching},
-	{"v3 обычная", embedV3(stego.LevelNormal, 0, 0)},
-	{"v3 повышенная", embedV3(stego.LevelHigh, 0, 0)},
-	{"v3 максимальная", embedV3(stego.LevelMax, 0, 0)},
+	{"v3 обычная", embedV3(stego.LevelNormal, 0, 0, 0)},
+	{"v3 повышенная", embedV3(stego.LevelHigh, 0, 0, 0)},
+	{"v3 максимальная", embedV3(stego.LevelMax, 0, 0, 0)},
+	// варианты записи сообщения «повышенной», из которых выбирали (раздел 7
+	// docs/EXPERIMENTS.md); заголовок у них — нынешний
+	{"повышенная, чётность четырёх (прежняя)", embedV3(stego.LevelHigh, 1, 4, 0)},
+	{"повышенная, код Хэмминга (3, 1)", embedV3(stego.LevelHigh, 0, 0, 2)},
 }
 
 // ─── стегоанализ и качество ─────────────────────────────────────────────────
@@ -401,7 +407,7 @@ func detect(dir, out string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Стегоанализ и качество\n\n")
 	fmt.Fprintf(&b, "Контейнеров: %d (цветные фрагменты %d×%d), время %s.\n\n", len(covers), covers[0].W, covers[0].H, time.Since(t0).Round(time.Second))
-	fmt.Fprintf(&b, "Нагрузка — бит сообщения на элемент (канал пикселя). Для v3 это шифротекст с имитовставкой; код Рида–Соломона и заголовок добавляются сверху.\n\n")
+	fmt.Fprintf(&b, "Нагрузка — бит сообщения на элемент (канал пикселя). Для v3 это шифротекст с имитовставкой; заголовок и код Рида–Соломона (на «повышенной» и «максимальной») добавляются сверху.\n\n")
 	fmt.Fprintf(&b, "AUC — вероятность, что детектор поставит стегоизображению оценку выше, чем пустому: 0,5 — не отличает, 1,0 — отличает всегда.\n\n")
 	cr, cs, cc := column(coverSc, func(s scores) float64 { return s.rs }), column(coverSc, func(s scores) float64 { return s.spa }), column(coverSc, func(s scores) float64 { return s.chi })
 	fmt.Fprintf(&b, "Пустые контейнеры: RS %.4f, SPA %.4f, χ² %.3f (средние оценки).\n\n", mean(cr), mean(cs), mean(cc))
@@ -466,7 +472,8 @@ const robustText = "Груз прибудет в порт не раньше су
 type variant struct {
 	name    string
 	level   stego.Level
-	h, maxW int
+	h, maxW int // STC вместо способа уровня
+	ham     int // код Хэмминга вместо способа уровня
 }
 
 type damage struct {
@@ -522,15 +529,17 @@ func robust(dir, out string) error {
 	if err != nil {
 		return err
 	}
+	// варианты, отличные от уровней, меняют только запись сообщения: код RS и
+	// заголовок у них — от своего уровня
 	variants := []variant{
-		{"обычная: RS 32, h=10, w≤64", stego.LevelNormal, 0, 0},
-		{"RS 32, h=1, w≤8", stego.LevelNormal, 1, 8},
-		{"RS 64, h=1, w≤8", stego.LevelHigh, 1, 8},
-		{"повышенная: RS 64, h=1, w≤4", stego.LevelHigh, 0, 0},
-		{"RS 64, h=4, w≤4", stego.LevelHigh, 4, 4},
-		{"RS 128, h=1, w≤4", stego.LevelMax, 1, 4},
-		{"RS 128, h=1, w≤2", stego.LevelMax, 1, 2},
-		{"максимальная: RS 128, h=1, w=1", stego.LevelMax, 0, 0},
+		{"обычная: без RS, h=10, w≤255", stego.LevelNormal, 0, 0, 0},
+		{"RS 64, h=1, w≤8", stego.LevelHigh, 1, 8, 0},
+		{"RS 64, h=1, w≤4 (прежняя «повышенная»)", stego.LevelHigh, 1, 4, 0},
+		{"повышенная: RS 64, код Хэмминга (15, 11)", stego.LevelHigh, 0, 0, 0},
+		{"RS 64, код Хэмминга (3, 1)", stego.LevelHigh, 0, 0, 2},
+		{"RS 128, h=1, w≤4", stego.LevelMax, 1, 4, 0},
+		{"RS 128, h=1, w≤2", stego.LevelMax, 1, 2, 0},
+		{"максимальная: RS 128, h=1, w=1", stego.LevelMax, 0, 0, 0},
 	}
 	damages := []damage{{"без повреждений", func(c *stego.Cover, _ *rand.Rand) *stego.Cover { return c }}}
 	for _, f := range []float64{0.005, 0.01, 0.02, 0.05, 0.1, 0.2} {
@@ -561,7 +570,7 @@ func robust(dir, out string) error {
 				nonce := make([]byte, 16)
 				nonce[1] = byte(i)
 				st, rep, err := stego.EmbedCover(cv, robustText, stego.Options{
-					Mode: suite.KuznyechikMGM, Level: va.level, Master: master, Nonce: nonce, H: va.h, MaxW: va.maxW,
+					Mode: suite.KuznyechikMGM, Level: va.level, Master: master, Nonce: nonce, H: va.h, MaxW: va.maxW, Ham: va.ham,
 				})
 				if err != nil {
 					fmt.Fprintln(os.Stderr, va.name, err)

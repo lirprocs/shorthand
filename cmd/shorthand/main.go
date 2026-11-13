@@ -310,9 +310,14 @@ func (t *embedTab) refresh() {
 		t.info.SetText(err.Error())
 	default:
 		// стрелку «→» шрифт Fyne не содержит — только слова
-		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), с имитовставкой и кодом Рида–Соломона — %d байт. "+
-			"Занято %.2f%% пригодных элементов, на бит сообщения — %d элементов.",
-			rep.Chars, rep.Compressed, rep.Method, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.W))
+		// на «обычной» кода Рида–Соломона нет: только имитовставка
+		coded := "с имитовставкой"
+		if rep.Coded != rep.Ciphertext {
+			coded += " и кодом Рида–Соломона"
+		}
+		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), %s — %d байт. "+
+			"Занято %.2f%% пригодных элементов, %s.",
+			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread()))
 	}
 }
 
