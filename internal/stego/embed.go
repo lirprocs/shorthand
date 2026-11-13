@@ -24,12 +24,14 @@ type Options struct {
 	// Для экспериментов (cmd/stegobench), в программе не используются:
 	// фиксированный nonce, заранее выработанный master (чтобы не считать
 	// Argon2 в каждом опыте), готовая полезная нагрузка вместо текста и
-	// другие параметры STC вместо параметров уровня.
+	// другой способ записи сообщения вместо способа уровня: STC с высотой H
+	// и шириной до MaxW либо код Хэмминга с Ham битами на группу.
 	Nonce  []byte
 	Master []byte
 	Raw    []byte
 	H      int
 	MaxW   int
+	Ham    int
 }
 
 // Report — что и как встроено.
@@ -40,13 +42,26 @@ type Report struct {
 	Chars         int // символов текста
 	Compressed    int // байт после сжатия
 	Ciphertext    int // байт шифротекста с имитовставкой
-	Coded         int // байт после кода Рида–Соломона
-	MsgBits       int // бит сообщения для STC
-	H, W          int
+	Coded         int // байт после кода Рида–Соломона (на «обычной» кода нет)
+	MsgBits       int // бит сообщения
+	H, W          int // STC: высота и число элементов на бит (у кода Хэмминга — нули)
+	Ham           int // код Хэмминга: бит на группу из 2^Ham − 1 элементов (0 — STC)
 	Elements      int // элементов контейнера, пригодных для встраивания
 	Used          int // из них занято (заголовок + сообщение)
 	Changes       int // изменено элементов сообщением
 	HeaderChanges int // изменено элементов заголовком
+}
+
+// Spread — как сообщение распределено по элементам (для сводки в окне).
+func (r *Report) Spread() string {
+	switch {
+	case r.Ham > 1:
+		n := 1<<r.Ham - 1
+		return fmt.Sprintf("запись кодом Хэмминга (%d, %d)", n, n-r.Ham)
+	case r.Ham == 1:
+		return "на бит сообщения — 1 элемент"
+	}
+	return fmt.Sprintf("на бит сообщения — %d элементов", r.W)
 }
 
 var (
@@ -81,6 +96,33 @@ func usableCount(c *Cover) int {
 	return n
 }
 
+// chooseCoding — способ записи сообщения из msgBits бит в avail элементов:
+// по уровню или, для экспериментов, по параметрам opt. Берётся самый
+// «широкий» способ, который помещается; false — не помещается никакой.
+func chooseCoding(lp LevelParams, opt Options, msgBits, avail int) (coding, bool) {
+	switch {
+	case opt.Ham > 0:
+		cd := coding{ham: min(opt.Ham, hamMaxP)}
+		return cd, cd.elems(msgBits) <= avail
+	case opt.H > 0 || lp.Ham == 0:
+		h, limit := lp.H, lp.MaxW
+		if opt.H > 0 {
+			h = min(opt.H, 12)
+		}
+		if opt.MaxW > 0 {
+			limit = min(opt.MaxW, maxW)
+		}
+		w := min(limit, avail/msgBits)
+		return coding{h: h, w: w}, w >= 1
+	}
+	for p := lp.Ham; p >= 1; p-- {
+		if cd := (coding{ham: p}); cd.elems(msgBits) <= avail {
+			return cd, true
+		}
+	}
+	return coding{}, false
+}
+
 // Plan считает размеры без встраивания (быстро, без Argon2).
 func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
 	if !opt.Mode.Valid() || opt.Level > LevelMax {
@@ -95,31 +137,27 @@ func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
 	}
 	aead, _ := opt.Mode.NewAEAD(make([]byte, opt.Mode.KeySize()))
 	lp := opt.Level.Params()
-	if opt.H > 0 {
-		lp.H = opt.H
-	}
-	if opt.MaxW > 0 {
-		lp.MaxW = min(opt.MaxW, maxW)
-	}
 	r := &Report{
 		Mode: opt.Mode, Level: opt.Level, Method: method,
 		Chars:      len([]rune(text)),
 		Compressed: len(comp),
 		Ciphertext: len(comp) + aead.Overhead(),
-		H:          lp.H,
 		Elements:   usableCount(c),
 	}
-	r.Coded = rs.CodedLen(r.Ciphertext, lp.RS)
+	r.Coded = codedLen(r.Ciphertext, lp.RS)
 	r.MsgBits = 8 * r.Coded
-	hElems := styleFor(opt.Level).elems()
-	avail := r.Elements - hElems
-	r.W = min(lp.MaxW, max(avail, 0)/r.MsgBits)
-	if r.W < 1 {
+	hElems := styleFor(formatVersion, opt.Level).elems(r.Elements)
+	cd, ok := chooseCoding(lp, opt, r.MsgBits, max(r.Elements-hElems, 0))
+	if !ok {
 		return r, nil, &CapacityError{Need: hElems + r.MsgBits, Have: r.Elements}
 	}
-	r.Used = hElems + r.MsgBits*r.W
+	r.H, r.W, r.Ham = cd.h, cd.w, cd.ham
+	r.Used = hElems + cd.elems(r.MsgBits)
 	return r, comp, nil
 }
+
+// coding — способ записи сообщения, выбранный Plan.
+func (r *Report) coding() coding { return coding{h: r.H, w: r.W, ham: r.Ham} }
 
 // positions — первые count пригодных элементов в порядке перестановки.
 // Если столько элементов в изображении нет, память под них не запрашивается.
@@ -203,7 +241,7 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 	if err != nil {
 		return nil, rep, err
 	}
-	mode, lp := opt.Mode, opt.Level.Params()
+	mode := opt.Mode
 	k := keys{master: opt.Master}
 	if k.master == nil {
 		k.master = kdf.Master(opt.Password)
@@ -218,15 +256,16 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 	} else if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, rep, err
 	}
-	hdr := Header{Version: formatVersion, Mode: mode, Method: rep.Method, Level: opt.Level, H: rep.H, W: rep.W, Length: rep.Ciphertext, Nonce: nonce}
+	cd := rep.coding()
+	hf, wf := cd.fields()
+	hdr := Header{Version: formatVersion, Mode: mode, Method: rep.Method, Level: opt.Level, H: hf, W: wf, Length: rep.Ciphertext, Nonce: nonce}
 	hb := hdr.Marshal()
 	aead, err := mode.NewAEAD(kdf.Derive(k.master, nonce[:], infoAEAD(mode), mode.KeySize()))
 	if err != nil {
 		return nil, rep, err
 	}
 	ct := aead.Seal(nil, hdr.aeadNonce(), comp, append(append([]byte(nil), hb...), opt.AAD...))
-	coded := rs.EncodeStream(ct, lp.RS)
-	msg := toBits(coded)
+	msg := toBits(encodeStream(ct, msgParity(formatVersion, opt.Level)))
 
 	// позиции
 	perm := k.perm(mode, cv.Len())
@@ -248,13 +287,14 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 		return n
 	}
 
-	// заголовок: поля под маской от R, код RS, STC — как у сообщения
-	style := styleFor(opt.Level)
+	// заголовок: поля под маской от R, код RS, запись — как у сообщения
+	// своего уровня
+	style := styleFor(formatVersion, opt.Level)
 	masked := append([]byte(nil), hb...)
 	maskFields(masked, k.master, mode)
 	hbits := toBits(rs.Encode(masked, style.parity))
-	hpos := pos[:style.elems()]
-	hy, _, err := stcEmbed(lsbs(cv, hpos), rho[:len(hpos)], hbits, style.h, style.w)
+	hpos := pos[:style.elems(rep.Elements)]
+	hy, err := style.coding(rep.Elements).embed(lsbs(cv, hpos), rho[:len(hpos)], hbits)
 	if err != nil {
 		return nil, rep, err
 	}
@@ -262,7 +302,7 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 
 	// сообщение
 	pay := pos[len(hpos):]
-	y, _, err := stcEmbed(lsbs(cv, pay), rho[len(hpos):], msg, rep.H, rep.W)
+	y, err := cd.embed(lsbs(cv, pay), rho[len(hpos):], msg)
 	if err != nil {
 		return nil, rep, err
 	}
@@ -278,10 +318,11 @@ func lsbs(c *Cover, pos []int) []uint8 {
 	return x
 }
 
-// readHeader пытается прочитать заголовок способом style. Возвращает поля и
-// 26 байт заголовка без маски — дополнительные данные шифра.
-func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode) (*Header, []byte, bool) {
-	pos, ok := positions(p, cv, style.elems())
+// readHeader пытается прочитать заголовок способом style; usable — число
+// пригодных элементов. Возвращает поля и 26 байт заголовка без маски —
+// дополнительные данные шифра.
+func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode, usable int) (*Header, []byte, bool) {
+	pos, ok := positions(p, cv, style.elems(usable))
 	if !ok {
 		return nil, nil, false
 	}
@@ -299,7 +340,7 @@ func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode) 
 			}
 		}
 	} else {
-		bits = stcExtract(lsbs(cv, pos), nb, style.h, style.w)
+		bits = style.coding(usable).extract(lsbs(cv, pos), nb)
 	}
 	hc := fromBits(bits)
 	if style.version == 3 {
@@ -312,21 +353,18 @@ func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode) 
 	}
 	hb := hc[:headerLen]
 	var (
-		h    *Header
-		err  error
-		want headerStyle
+		h   *Header
+		err error
 	)
 	if style.version == 3 {
-		if h, err = parseHeaderV3(hb); err == nil {
-			want = styleForV3(h.Level)
-		}
+		h, err = parseHeaderV3(hb)
 	} else {
 		maskFields(hb, k.master, mode)
-		if h, err = parseHeader(hb); err == nil {
-			want = styleFor(h.Level)
-		}
+		h, err = parseHeader(hb)
 	}
-	if err != nil || want != style || h.Mode != mode {
+	// версия и уровень из заголовка должны соответствовать способу, которым
+	// он прочитан
+	if err != nil || h.Mode != mode || styleFor(h.Version, h.Level) != style {
 		return nil, nil, false
 	}
 	return h, hb, true
@@ -338,7 +376,8 @@ type Extracted struct {
 	Mode         suite.Mode
 	Level        Level
 	Method       compress.Method
-	H, W         int
+	Version      int  // версия заголовка
+	H, W         int  // поля h и w заголовка
 	Corrected    int  // исправлено байтов кодом Рида–Соломона
 	UsedErasures bool // понадобились отметки стираний
 }
@@ -354,6 +393,7 @@ func ExtractCover(cv *Cover, password string, aad, master []byte) (*Extracted, e
 	if k.master == nil {
 		k.master = kdf.Master(password)
 	}
+	usable := usableCount(cv)
 	var (
 		hdr   *Header
 		hb    []byte
@@ -364,7 +404,7 @@ search:
 	for _, mode := range suite.All {
 		p := k.perm(mode, cv.Len())
 		for _, st := range headerStyles {
-			if h, b, ok := readHeader(cv, p, st, k, mode); ok {
+			if h, b, ok := readHeader(cv, p, st, k, mode, usable); ok {
 				hdr, hb, perm, style = h, b, p, st
 				break search
 			}
@@ -375,46 +415,53 @@ search:
 	}
 
 	mode := hdr.Mode
-	parity := rsParity(uint8(hdr.Level))
-	coded := rs.CodedLen(hdr.Length, parity)
-	msgBits := 8 * coded
-	need := style.elems() + msgBits*hdr.W
+	cd := codingOf(hdr.H, hdr.W)
+	parity := msgParity(hdr.Version, hdr.Level)
+	msgBits := 8 * codedLen(hdr.Length, parity)
+	hElems := style.elems(usable)
+	need := hElems + cd.elems(msgBits)
+	res := &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, Version: hdr.Version, H: hdr.H, W: hdr.W}
 	// длина из заголовка может быть любой (до 2²⁸ байт): сначала сверить с
 	// размером изображения, потом выделять память
-	if need > usableCount(cv) {
-		return &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, H: hdr.H, W: hdr.W}, ErrDamaged
+	if need > usable {
+		return res, ErrDamaged
 	}
 	pos, ok := positions(perm, cv, need)
 	if !ok {
 		return nil, ErrDamaged
 	}
-	pay := pos[style.elems():]
-	stream := fromBits(stcExtract(lsbs(cv, pay), msgBits, hdr.H, hdr.W))
+	pay := pos[hElems:]
+	stream := fromBits(cd.extract(lsbs(cv, pay), msgBits))
 
 	aead, err := mode.NewAEAD(kdf.Derive(k.master, hdr.Nonce[:], infoAEAD(mode), mode.KeySize()))
 	if err != nil {
 		return nil, err
 	}
 	ad := append(append([]byte(nil), hb...), aad...)
-	res := &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, H: hdr.H, W: hdr.W}
 
 	open := func(erased []bool) ([]byte, int, error) {
-		ct, st, err := rs.DecodeStream(stream, hdr.Length, parity, erased)
-		if err != nil {
-			return nil, 0, ErrDamaged
+		ct, corrected := stream, 0
+		if parity > 0 {
+			data, st, err := rs.DecodeStream(stream, hdr.Length, parity, erased)
+			if err != nil {
+				return nil, 0, ErrDamaged
+			}
+			ct, corrected = data, st.Corrected
 		}
 		pt, err := aead.Open(nil, hdr.aeadNonce(), ct, ad)
 		if err != nil {
-			if st.Corrected == 0 {
+			// без исправлений (или без кода) порчу не отличить от чужих
+			// имитозащищаемых данных
+			if corrected == 0 {
 				return nil, 0, ErrAuth
 			}
-			return nil, st.Corrected, ErrDamaged
+			return nil, corrected, ErrDamaged
 		}
-		return pt, st.Corrected, nil
+		return pt, corrected, nil
 	}
 	comp, corrected, err := open(nil)
 	if err != nil && !errors.Is(err, ErrAuth) {
-		if c2, n2, err2 := open(erasures(cv, pay, msgBits, hdr.H, hdr.W)); err2 == nil {
+		if c2, n2, err2 := open(erasures(cv, pay, msgBits, cd)); err2 == nil {
 			comp, corrected, err = c2, n2, nil
 			res.UsedErasures = true
 		}
@@ -439,13 +486,13 @@ search:
 // элементов: элемент подозрителен, если окрестность 5×5 в его канале
 // одноцветна (так выглядят закрашенные области; в естественных фотографиях
 // такие места редки, а HILL их почти не меняет).
-func erasures(cv *Cover, pay []int, msgBits, h, w int) []bool {
+func erasures(cv *Cover, pay []int, msgBits int, cd coding) []bool {
 	er := make([]bool, msgBits/8)
 	for t, e := range pay {
 		if !flat5(cv, e) {
 			continue
 		}
-		first, last := stcInfluence(t, msgBits, h, w)
+		first, last := cd.influence(t, msgBits)
 		for b := first / 8; b <= last/8; b++ {
 			er[b] = true
 		}

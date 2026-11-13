@@ -22,19 +22,20 @@ func noiseCover(w, h, c int, seed int64) *Cover {
 	return cv
 }
 
-// writeHeader записывает в контейнер заголовок версии 4 с любыми полями —
-// так, как это сделал бы тот, кто знает ключ.
+// writeHeader записывает в контейнер заголовок нынешней версии с любыми
+// полями — так, как это сделал бы тот, кто знает ключ.
 func writeHeader(t *testing.T, cv *Cover, master []byte, hdr Header) {
 	t.Helper()
 	k := keys{master: master}
-	style := styleFor(hdr.Level)
-	pos, ok := positions(k.perm(hdr.Mode, cv.Len()), cv, style.elems())
+	usable := usableCount(cv)
+	style := styleFor(formatVersion, hdr.Level)
+	pos, ok := positions(k.perm(hdr.Mode, cv.Len()), cv, style.elems(usable))
 	if !ok {
 		t.Fatal("контейнер мал для заголовка")
 	}
 	b := hdr.Marshal()
 	maskFields(b, master, hdr.Mode)
-	y, _, err := stcEmbed(lsbs(cv, pos), hillCosts(cv, pos), toBits(rs.Encode(b, style.parity)), style.h, style.w)
+	y, err := style.coding(usable).embed(lsbs(cv, pos), hillCosts(cv, pos), toBits(rs.Encode(b, style.parity)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +45,7 @@ func writeHeader(t *testing.T, cv *Cover, master []byte, hdr Header) {
 }
 
 func TestHeaderRoundTrip(t *testing.T) {
-	want := Header{Version: formatVersion, Mode: suite.MagmaMGM, Method: 1, Level: LevelHigh, H: 1, W: 4, Length: 123456}
+	want := Header{Version: formatVersion, Mode: suite.MagmaMGM, Method: 1, Level: LevelHigh, H: hamCode + 4, W: 1, Length: 123456}
 	for i := range want.Nonce {
 		want.Nonce[i] = byte(0xf0 + i)
 	}
@@ -65,6 +66,51 @@ func TestHeaderRoundTrip(t *testing.T) {
 	}
 }
 
+// Какие сочетания версии и полей h, w допустимы: код Хэмминга и ширина больше
+// 64 появились в версии 5.
+func TestHeaderFieldLimits(t *testing.T) {
+	for _, c := range []struct {
+		version, h, w int
+		ok            bool
+	}{
+		{5, 10, 255, true}, {5, 10, 64, true}, {5, 1, 1, true}, {5, 12, 1, true},
+		{5, hamCode + 1, 1, true}, {5, hamCode + 4, 1, true}, {5, hamCode + hamMaxP, 1, true},
+		{5, hamCode + hamMaxP + 1, 1, false}, {5, hamCode + 4, 2, false}, {5, hamCode, 1, false},
+		{5, 13, 1, false}, {5, 0, 1, false}, {5, 10, 0, false},
+		{4, 10, 64, true}, {4, 1, 4, true}, {4, 10, 65, false}, {4, hamCode + 4, 1, false},
+		{6, 10, 8, false}, {3, 10, 8, false}, // версию 3 разбирает parseHeaderV3
+	} {
+		h := Header{Version: c.version, Mode: suite.AsconAEAD128, Level: LevelNormal, H: c.h, W: c.w, Length: 100}
+		got, err := parseHeader(h.Marshal())
+		if (err == nil) != c.ok {
+			t.Errorf("версия %d, h = %d, w = %d: ошибка %v, ожидалось ok = %v", c.version, c.h, c.w, err, c.ok)
+		}
+		if err == nil && (got.Version != c.version || got.H != c.h || got.W != c.w) {
+			t.Errorf("версия %d, h = %d, w = %d: разобрано %+v", c.version, c.h, c.w, got)
+		}
+	}
+}
+
+// Ширина STC заголовка «обычной»: от 8 до 64, не больше восьмой части
+// изображения. Значения — часть формата.
+func TestHeaderWidth(t *testing.T) {
+	bits := styleNormal.bits()
+	if bits != 272 {
+		t.Fatalf("заголовок «обычной» — %d бит", bits)
+	}
+	for usable, want := range map[int]int{0: 8, 3600: 8, 17407: 8, 19584: 9, 90000: 41, 139263: 63, 139264: 64, 6912000: 64} {
+		if got := headerWidth(usable, bits); got != want {
+			t.Errorf("пригодных элементов %d: ширина %d, ожидалось %d", usable, got, want)
+		}
+	}
+	if n := styleHigh.elems(1 << 20); n != 2700 {
+		t.Errorf("заголовок «повышенной» занимает %d элементов", n)
+	}
+	if n := styleMax.elems(1 << 20); n != 720 {
+		t.Errorf("заголовок «максимальной» занимает %d элементов", n)
+	}
+}
+
 // Заголовок с верным ключом, но с длиной, которой в изображении быть не
 // может: извлечение должно ответить «повреждено», не запрашивая память под
 // несуществующие элементы (раньше — гигабайты, при длине 2²⁸ — падение).
@@ -72,7 +118,12 @@ func TestCraftedLengthDoesNotAllocate(t *testing.T) {
 	for _, lvl := range []Level{LevelNormal, LevelHigh, LevelMax} {
 		cv := noiseCover(200, 150, 3, int64(lvl))
 		lp := lvl.Params()
-		writeHeader(t, cv, testMaster, Header{Mode: suite.KuznyechikMGM, Level: lvl, H: lp.H, W: lp.MaxW, Length: 1 << 28})
+		cd := coding{h: lp.H, w: lp.MaxW}
+		if lp.Ham > 0 {
+			cd = coding{ham: lp.Ham}
+		}
+		hf, wf := cd.fields()
+		writeHeader(t, cv, testMaster, Header{Mode: suite.KuznyechikMGM, Level: lvl, H: hf, W: wf, Length: 1 << 28})
 		var a, b runtime.MemStats
 		runtime.ReadMemStats(&a)
 		res, err := ExtractCover(cv, "", nil, testMaster)
@@ -159,8 +210,9 @@ func TestHeaderAvoidsFlatAreas(t *testing.T) {
 		}
 		total := rep.Changes + rep.HeaderChanges
 		t.Logf("%v: изменений %d (заголовок %d), из них в заливке %d", lvl, total, rep.HeaderChanges, flat)
-		// при w = 4 все четыре элемента группы лежат в заливке с вероятностью
-		// 1/16, и половину таких групп приходится менять: около 3 % изменений
+		// у кода Хэмминга (15, 11) в заливку попадает изменение группы, у
+		// которой в заливке и нужный элемент, и по элементу в каждой из семи
+		// заменяющих его пар: 1/2 · (3/4)⁷ ≈ 7 % групп
 		if lvl == LevelNormal && flat != 0 || flat*10 > total {
 			t.Errorf("%v: в заливке %d изменений из %d", lvl, flat, total)
 		}
