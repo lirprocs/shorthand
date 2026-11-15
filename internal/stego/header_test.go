@@ -67,13 +67,15 @@ func TestHeaderRoundTrip(t *testing.T) {
 }
 
 // Какие сочетания версии и полей h, w допустимы: код Хэмминга и ширина больше
-// 64 появились в версии 5.
+// 64 (до 1023, старшие биты — в байте 19) появились в версии 5.
 func TestHeaderFieldLimits(t *testing.T) {
 	for _, c := range []struct {
 		version, h, w int
 		ok            bool
 	}{
 		{5, 10, 255, true}, {5, 10, 64, true}, {5, 1, 1, true}, {5, 12, 1, true},
+		{5, 12, 256, true}, {5, 11, 700, true}, {5, 10, 1023, true}, {5, 12, 1024, false},
+		{4, 10, 300, false}, // старшие биты w — только в версии 5
 		{5, hamCode + 1, 1, true}, {5, hamCode + 4, 1, true}, {5, hamCode + hamMaxP, 1, true},
 		{5, hamCode + hamMaxP + 1, 1, false}, {5, hamCode + 4, 2, false}, {5, hamCode, 1, false},
 		{5, 13, 1, false}, {5, 0, 1, false}, {5, 10, 0, false},
@@ -173,7 +175,13 @@ func TestHeaderLeavesNoCommonBits(t *testing.T) {
 		for _, lvl := range []Level{LevelNormal, LevelHigh, LevelMax} {
 			st := make([]*Cover, n)
 			for i := range st {
-				out, _, err := EmbedCover(covers[i], fmt.Sprintf("сообщение номер %d", i), Options{Mode: mode, Level: lvl, Master: testMaster})
+				opt := Options{Mode: mode, Level: lvl, Master: testMaster}
+				if lvl == LevelNormal {
+					// заголовок от записи сообщения не зависит, а с h = 12 и w до
+					// 1023 тест шёл бы минуту (под -race — больше 10 минут)
+					opt.H, opt.MaxW = 10, 64
+				}
+				out, _, err := EmbedCover(covers[i], fmt.Sprintf("сообщение номер %d", i), opt)
 				if err != nil {
 					t.Fatal(err)
 				}

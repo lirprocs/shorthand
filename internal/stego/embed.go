@@ -113,6 +113,9 @@ func chooseCoding(lp LevelParams, opt Options, msgBits, avail int) (coding, bool
 			limit = min(opt.MaxW, maxW)
 		}
 		w := min(limit, avail/msgBits)
+		if opt.H == 0 {
+			h = stcHeight(msgBits, w, h)
+		}
 		return coding{h: h, w: w}, w >= 1
 	}
 	for p := lp.Ham; p >= 1; p-- {

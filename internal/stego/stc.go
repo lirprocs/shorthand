@@ -23,10 +23,23 @@ import (
 //
 // Длинное сообщение делится на куски, у каждого — свой отрезок контейнера;
 // куски кодируются параллельно. Размер куска выбран так, чтобы путь Витерби
-// (len·w·2^h бит) занимал не больше 4 МиБ: от 256 до 4096 бит сообщения.
+// (len·w·2^h бит) занимал не больше 4 МиБ, но не меньше 256 бит сообщения и
+// не больше 4096: при больших w и h путь куска из 256 бит больше 4 МиБ, и
+// одновременно кодируется столько кусков, сколько помещается в stcMemory.
 
 func chunkBitsFor(h, w int) int {
 	return max(256, min(4096, (1<<25)/(w<<h)))
+}
+
+// stcMemory — сколько памяти могут занимать пути Витерби одновременно
+// кодируемых кусков. При h = 12 и w = 1023 путь куска из 256 бит — 128 МиБ.
+const stcMemory = 512 << 20
+
+// stcParallel — сколько кусков кодировать одновременно: не больше числа
+// процессоров и не больше, чем помещается в stcMemory.
+func stcParallel(h, w int) int {
+	path := chunkBitsFor(h, w) * w << uint(h) / 8 // байт на путь куска
+	return max(1, min(runtime.NumCPU(), stcMemory/path))
 }
 
 // hhatColumns — столбцы Ĥ: h-битные числа со старшим и младшим битом 1
@@ -98,7 +111,7 @@ func stcEmbed(x []uint8, rho []float64, msg []uint8, h, w int) ([]uint8, float64
 	costs := make([]float64, len(chs))
 	errs := make([]error, len(chs))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, runtime.NumCPU())
+	sem := make(chan struct{}, stcParallel(h, w))
 	for i, c := range chs {
 		wg.Add(1)
 		sem <- struct{}{}

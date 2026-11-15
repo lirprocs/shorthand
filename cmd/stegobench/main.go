@@ -316,8 +316,9 @@ var methods = []method{
 	{"v3 обычная", embedV3(stego.LevelNormal, 0, 0, 0)},
 	{"v3 повышенная", embedV3(stego.LevelHigh, 0, 0, 0)},
 	{"v3 максимальная", embedV3(stego.LevelMax, 0, 0, 0)},
-	// варианты записи сообщения «повышенной», из которых выбирали (раздел 7
+	// варианты записи сообщения, из которых выбирали (раздел 7
 	// docs/EXPERIMENTS.md); заголовок у них — нынешний
+	{"обычная, h = 10, w ≤ 255 (прежняя)", embedV3(stego.LevelNormal, 10, 255, 0)},
 	{"повышенная, чётность четырёх (прежняя)", embedV3(stego.LevelHigh, 1, 4, 0)},
 	{"повышенная, код Хэмминга (3, 1)", embedV3(stego.LevelHigh, 0, 0, 2)},
 }
@@ -532,7 +533,7 @@ func robust(dir, out string) error {
 	// варианты, отличные от уровней, меняют только запись сообщения: код RS и
 	// заголовок у них — от своего уровня
 	variants := []variant{
-		{"обычная: без RS, h=10, w≤255", stego.LevelNormal, 0, 0, 0},
+		{"обычная: без RS, h=10–12, w≤1023", stego.LevelNormal, 0, 0, 0},
 		{"RS 64, h=1, w≤8", stego.LevelHigh, 1, 8, 0},
 		{"RS 64, h=1, w≤4 (прежняя «повышенная»)", stego.LevelHigh, 1, 4, 0},
 		{"повышенная: RS 64, код Хэмминга (15, 11)", stego.LevelHigh, 0, 0, 0},

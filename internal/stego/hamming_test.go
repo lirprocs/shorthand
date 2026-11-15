@@ -236,12 +236,13 @@ func TestHighLevelFallsBackToShorterCodes(t *testing.T) {
 	}
 }
 
-// «Обычная»: короткое сообщение в большом изображении пишется с шириной 255,
-// в маленьком — заголовок узкий (w = 8), и всё читается.
+// «Обычная»: короткое сообщение в большом изображении пишется с наибольшей
+// шириной (1023) и высотой 12, в маленьком — заголовок узкий (w = 8), и всё
+// читается.
 func TestNormalLevelWidths(t *testing.T) {
 	big := FromImage(testImage(320, 240, 22, false))
 	rep, _, err := Plan(big, "Привет!", Options{Mode: suite.AsconAEAD128, Master: testMaster})
-	if err != nil || rep.W != maxW || rep.H != 10 || rep.Ham != 0 || rep.Coded != rep.Ciphertext {
+	if err != nil || rep.W != maxW || rep.H != 12 || rep.Ham != 0 || rep.Coded != rep.Ciphertext {
 		t.Fatalf("большое изображение: %+v, %v", rep, err)
 	}
 	if hw := styleNormal.coding(rep.Elements).w; hw != 64 {
@@ -261,6 +262,36 @@ func TestNormalLevelWidths(t *testing.T) {
 	}
 	if got, err := ExtractCover(out, "", nil, testMaster); err != nil || got.Text != "привет!" {
 		t.Fatalf("маленькое изображение: %v", err)
+	}
+
+	// ширина больше 255: её старшие биты лежат в байте 19 заголовка
+	out, rep, err = EmbedCover(big, "Привет!", Options{Mode: suite.KuznyechikMGM, Master: testMaster})
+	if err != nil || rep.W <= 255 {
+		t.Fatalf("w = %d: %v", rep.W, err)
+	}
+	if got, err := ExtractCover(out, "", nil, testMaster); err != nil || got.Text != "привет!" || got.W != rep.W || got.H != rep.H {
+		t.Fatalf("w = %d, h = %d: %v, %+v", rep.W, rep.H, err, got)
+	}
+}
+
+// Высота STC «обычной» снижается с 12 до 10, когда работы слишком много.
+func TestSTCHeight(t *testing.T) {
+	for _, c := range []struct{ bits, w, hmax, want int }{
+		{368, 1023, 12, 12},    // 52 символа на фотографии
+		{1032, 1023, 12, 11},   // 254 символа
+		{3528, 1023, 12, 10},   // 1000 символов
+		{3528, 485, 12, 11},    // 1000 символов на изображении 960×600
+		{45152, 152, 12, 10},   // 13 808 символов
+		{100, 1, 1, 1},         // «максимальная»: высота 1 не меняется
+		{100000, 1023, 10, 10}, // ниже 10 высота не опускается
+	} {
+		if got := stcHeight(c.bits, c.w, c.hmax); got != c.want {
+			t.Errorf("stcHeight(%d, %d, %d) = %d, ожидалось %d", c.bits, c.w, c.hmax, got, c.want)
+		}
+	}
+	// память кодера: путь куска при h = 12, w = 1023 — 128 МиБ, одновременно не больше 4
+	if p := stcParallel(12, 1023); p < 1 || p > 4 {
+		t.Errorf("stcParallel(12, 1023) = %d", p)
 	}
 }
 
