@@ -345,7 +345,9 @@ func ensembleReport(coverBin, stegoBin string, dim, splits, dsub int, name, out 
 	return err
 }
 
-var dsubGrid = []int{250, 500, 1000, 2000, 3000}
+// dsubGrid — сетка подбора d_sub. На 2000 изображениях выигрывали 250 и 500, 3000 —
+// ни разу (EXPERIMENTS.md, раздел 10), поэтому сетка сдвинута вниз.
+var dsubGrid = []int{100, 250, 500, 1000, 2000}
 
 // hillSim — моделирование оптимального троичного встраивания ±1 с
 // стоимостями HILL (как в работах по HILL и SRM [Li и др., 2014]): элемент
