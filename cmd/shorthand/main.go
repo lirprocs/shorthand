@@ -164,7 +164,7 @@ func newEmbedTab() *embedTab {
 		outLabel:  pathLabel("Куда сохранить — выберется после выбора изображения"),
 	}
 	var infoBox, statusBox fyne.CanvasObject
-	t.info, infoBox = fixedLabel(3)
+	t.info, infoBox = fixedLabel(4) // сводка, надёжность и риск
 	t.status, statusBox = fixedLabel(3)
 
 	t.textEntry = widget.NewMultiLineEntry()
@@ -317,15 +317,15 @@ func (t *embedTab) refresh() {
 		// на «обычной» кода Рида–Соломона нет: только имитовставка
 		coded := "с имитовставкой"
 		if rep.RS > 0 {
-			coded += fmt.Sprintf(" и кодом Рида–Соломона (%d проверочных байт на блок)", rep.RS)
+			coded += fmt.Sprintf(" и кодом Рида–Соломона (r = %d)", rep.RS)
 		}
 		robust := ""
 		if rep.HeaderClass > 0 { // уровень с повреждениями
-			robust = fmt.Sprintf(" По модели сообщение переживёт такие повреждения с вероятностью не ниже %d%%.", min(int(100*rep.Reliability), 99))
+			robust = fmt.Sprintf(" Переживёт повреждения уровня с вероятностью не ниже %d%% (по модели).", min(int(100*rep.Reliability), 99))
 		}
 		risk, auc, _ := precheck.RiskOf(rep, t.check)
 		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), %s — %d байт. "+
-			"Занято %.2f%% пригодных элементов, %s.%s Риск обнаружения — %s (ожидаемый AUC детектора SPAM — %.2f).",
+			"Занято %.2f%% пригодных элементов, %s.%s Риск обнаружения: %s (AUC детектора ≈ %.2f).",
 			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread(), robust,
 			risk, auc))
 	}
