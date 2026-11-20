@@ -18,21 +18,29 @@ import (
 type Options struct {
 	Mode     suite.Mode
 	Level    Level
+	Target   *Target // своя цель вместо цели уровня (в заголовке — LevelCustom)
 	Password string
 	AAD      []byte // имитозащищаемые данные (не встраиваются, нужны при извлечении)
 
 	// Для экспериментов (cmd/stegobench), в программе не используются:
 	// фиксированный nonce, заранее выработанный master (чтобы не считать
 	// Argon2 в каждом опыте), готовая полезная нагрузка вместо текста и
-	// другой способ записи сообщения вместо способа уровня: STC с высотой H
-	// и шириной до MaxW либо код Хэмминга с Ham битами на группу.
+	// заданный способ записи сообщения вместо выбора по модели: STC с
+	// высотой H и шириной до MaxW либо код Хэмминга с Ham битами на группу
+	// (код RS и заголовок — как у уровня версии 5) и заданный код RS
+	// (FixRS, RS проверочных байтов на блок).
 	Nonce  []byte
 	Master []byte
 	Raw    []byte
 	H      int
 	MaxW   int
 	Ham    int
+	FixRS  bool
+	RS     int
 }
+
+// fixed — способ записи задан вручную (стенд), модель не применяется.
+func (o Options) fixed() bool { return o.H > 0 || o.MaxW > 0 || o.Ham > 0 || o.FixRS }
 
 // Report — что и как встроено.
 type Report struct {
@@ -43,13 +51,18 @@ type Report struct {
 	Compressed    int // байт после сжатия
 	Ciphertext    int // байт шифротекста с имитовставкой
 	Coded         int // байт после кода Рида–Соломона (на «обычной» кода нет)
-	MsgBits       int // бит сообщения
-	H, W          int // STC: высота и число элементов на бит (у кода Хэмминга — нули)
-	Ham           int // код Хэмминга: бит на группу из 2^Ham − 1 элементов (0 — STC)
-	Elements      int // элементов контейнера, пригодных для встраивания
-	Used          int // из них занято (заголовок + сообщение)
-	Changes       int // изменено элементов сообщением
-	HeaderChanges int // изменено элементов заголовком
+	RS            int // проверочных байтов кода Рида–Соломона на блок (0 — без кода)
+	HeaderClass   int // способ записи заголовка (stylesV6)
+	Target        Target
+	Reliability   float64 // вероятность извлечь сообщение при повреждениях цели — по модели
+	Distortion    float64 // ожидаемое искажение сообщения по модели (0 — не оценивалось)
+	MsgBits       int     // бит сообщения
+	H, W          int     // STC: высота и число элементов на бит (у кода Хэмминга — нули)
+	Ham           int     // код Хэмминга: бит на группу из 2^Ham − 1 элементов (0 — STC)
+	Elements      int     // элементов контейнера, пригодных для встраивания
+	Used          int     // из них занято (заголовок + сообщение)
+	Changes       int     // изменено элементов сообщением
+	HeaderChanges int     // изменено элементов заголовком
 }
 
 // Spread — как сообщение распределено по элементам (для сводки в окне).
@@ -126,10 +139,14 @@ func chooseCoding(lp LevelParams, opt Options, msgBits, avail int) (coding, bool
 	return coding{}, false
 }
 
-// Plan считает размеры без встраивания (быстро, без Argon2).
+// Plan выбирает параметры и считает размеры без встраивания (без Argon2).
 func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
-	if !opt.Mode.Valid() || opt.Level > LevelMax {
-		return nil, nil, errors.New("неверный режим или уровень")
+	if !opt.Mode.Valid() || opt.Level > LevelMax || opt.Target != nil && !opt.Target.valid() {
+		return nil, nil, errors.New("неверный режим, уровень или цель")
+	}
+	level, target := opt.Level, opt.Level.Target()
+	if opt.Target != nil {
+		level, target = LevelCustom, *opt.Target
 	}
 	var method compress.Method
 	var comp []byte
@@ -139,23 +156,42 @@ func Plan(c *Cover, text string, opt Options) (*Report, []byte, error) {
 		method, comp = compress.Compress(alphabet.Encode(text))
 	}
 	aead, _ := opt.Mode.NewAEAD(make([]byte, opt.Mode.KeySize()))
-	lp := opt.Level.Params()
 	r := &Report{
-		Mode: opt.Mode, Level: opt.Level, Method: method,
+		Mode: opt.Mode, Level: level, Method: method, Target: target,
 		Chars:      len([]rune(text)),
 		Compressed: len(comp),
 		Ciphertext: len(comp) + aead.Overhead(),
 		Elements:   usableCount(c),
 	}
-	r.Coded = codedLen(r.Ciphertext, lp.RS)
-	r.MsgBits = 8 * r.Coded
-	hElems := styleFor(formatVersion, opt.Level).elems(r.Elements)
-	cd, ok := chooseCoding(lp, opt, r.MsgBits, max(r.Elements-hElems, 0))
-	if !ok {
-		return r, nil, &CapacityError{Need: hElems + r.MsgBits, Have: r.Elements}
+	var cd coding
+	if opt.fixed() {
+		// стенд: способ записи, код RS и заголовок — как у уровня версии 5
+		lp := opt.Level.Params()
+		r.RS, r.HeaderClass = lp.RS, int(opt.Level)
+		if opt.FixRS {
+			r.RS = opt.RS
+		}
+		if r.RS < 0 || r.RS > maxRS || r.RS%2 != 0 {
+			return r, nil, errors.New("код RS: чётное число от 0 до 254")
+		}
+		r.MsgBits = 8 * codedLen(r.Ciphertext, r.RS)
+		hElems := stylesV6[r.HeaderClass].elems(r.Elements)
+		var ok bool
+		if cd, ok = chooseCoding(lp, opt, r.MsgBits, max(r.Elements-hElems, 0)); !ok {
+			return r, nil, &CapacityError{Need: hElems + r.MsgBits, Have: r.Elements}
+		}
+		r.Reliability = reliability(c, r.Ciphertext, target, cd, r.RS, r.HeaderClass, r.Elements)
+	} else {
+		ch, err := choose(c, r.Ciphertext, target, r.Elements)
+		if err != nil {
+			return r, nil, err
+		}
+		cd, r.RS, r.HeaderClass, r.Reliability, r.Distortion = ch.cd, ch.rs, ch.class, ch.reliability, ch.distortion
 	}
+	r.Coded = codedLen(r.Ciphertext, r.RS)
+	r.MsgBits = 8 * r.Coded
 	r.H, r.W, r.Ham = cd.h, cd.w, cd.ham
-	r.Used = hElems + cd.elems(r.MsgBits)
+	r.Used = stylesV6[r.HeaderClass].elems(r.Elements) + cd.elems(r.MsgBits)
 	return r, comp, nil
 }
 
@@ -261,14 +297,15 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 	}
 	cd := rep.coding()
 	hf, wf := cd.fields()
-	hdr := Header{Version: formatVersion, Mode: mode, Method: rep.Method, Level: opt.Level, H: hf, W: wf, Length: rep.Ciphertext, Nonce: nonce}
+	hdr := Header{Version: formatVersion, Mode: mode, Method: rep.Method, Level: rep.Level, H: hf, W: wf, Length: rep.Ciphertext,
+		RS: rep.RS, Class: rep.HeaderClass, Nonce: nonce}
 	hb := hdr.Marshal()
 	aead, err := mode.NewAEAD(kdf.Derive(k.master, nonce[:], infoAEAD(mode), mode.KeySize()))
 	if err != nil {
 		return nil, rep, err
 	}
 	ct := aead.Seal(nil, hdr.aeadNonce(), comp, append(append([]byte(nil), hb...), opt.AAD...))
-	msg := toBits(encodeStream(ct, msgParity(formatVersion, opt.Level)))
+	msg := toBits(encodeStream(ct, rep.RS))
 
 	// позиции
 	perm := k.perm(mode, cv.Len())
@@ -290,9 +327,8 @@ func EmbedCover(cv *Cover, text string, opt Options) (*Cover, *Report, error) {
 		return n
 	}
 
-	// заголовок: поля под маской от R, код RS, запись — как у сообщения
-	// своего уровня
-	style := styleFor(formatVersion, opt.Level)
+	// заголовок: поля под маской от R, код RS, запись — выбранным способом
+	style := stylesV6[rep.HeaderClass]
 	masked := append([]byte(nil), hb...)
 	maskFields(masked, k.master, mode)
 	hbits := toBits(rs.Encode(masked, style.parity))
@@ -367,7 +403,7 @@ func readHeader(cv *Cover, p *Perm, style headerStyle, k keys, mode suite.Mode, 
 	}
 	// версия и уровень из заголовка должны соответствовать способу, которым
 	// он прочитан
-	if err != nil || h.Mode != mode || styleFor(h.Version, h.Level) != style {
+	if err != nil || h.Mode != mode || styleOf(h) != style {
 		return nil, nil, false
 	}
 	return h, hb, true
@@ -381,6 +417,7 @@ type Extracted struct {
 	Method       compress.Method
 	Version      int  // версия заголовка
 	H, W         int  // поля h и w заголовка
+	RS           int  // проверочных байтов кода Рида–Соломона на блок
 	Corrected    int  // исправлено байтов кодом Рида–Соломона
 	UsedErasures bool // понадобились отметки стираний
 }
@@ -419,11 +456,11 @@ search:
 
 	mode := hdr.Mode
 	cd := codingOf(hdr.H, hdr.W)
-	parity := msgParity(hdr.Version, hdr.Level)
+	parity := msgParity(hdr)
 	msgBits := 8 * codedLen(hdr.Length, parity)
 	hElems := style.elems(usable)
 	need := hElems + cd.elems(msgBits)
-	res := &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, Version: hdr.Version, H: hdr.H, W: hdr.W}
+	res := &Extracted{Mode: mode, Level: hdr.Level, Method: hdr.Method, Version: hdr.Version, H: hdr.H, W: hdr.W, RS: parity}
 	// длина из заголовка может быть любой (до 2²⁸ байт): сначала сверить с
 	// размером изображения, потом выделять память
 	if need > usable {

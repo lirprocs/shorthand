@@ -185,57 +185,6 @@ func randomText(rng *rand.Rand, n int) string {
 	return b.String()
 }
 
-// «Повышенная»: пока сообщение помещается, берётся код (15, 11); по мере
-// заполнения изображения — более короткие коды, вплоть до прямой записи.
-// Каждое сообщение должно извлекаться.
-func TestHighLevelFallsBackToShorterCodes(t *testing.T) {
-	cv := FromImage(testImage(120, 90, 21, false)) // 32 400 элементов
-	rng := rand.New(rand.NewSource(14))
-	seen := map[int]bool{}
-	for n := 200; n <= 9000; n += 200 {
-		text := randomText(rng, n)
-		opt := Options{Mode: suite.KuznyechikMGM, Level: LevelHigh, Master: testMaster}
-		rep, _, err := Plan(cv, text, opt)
-		if err != nil {
-			var ce *CapacityError
-			if !errors.As(err, &ce) {
-				t.Fatal(err)
-			}
-			break
-		}
-		if rep.Ham < 1 || rep.Ham > 4 || rep.H != 0 || rep.W != 0 {
-			t.Fatalf("%d символов: h = %d, w = %d, ham = %d", n, rep.H, rep.W, rep.Ham)
-		}
-		if rep.Used > rep.Elements {
-			t.Fatalf("занято %d из %d", rep.Used, rep.Elements)
-		}
-		// более длинный код не поместился бы
-		if rep.Ham < 4 && styleHigh.elems(rep.Elements)+hamElems(rep.MsgBits, rep.Ham+1) <= rep.Elements {
-			t.Fatalf("%d символов: выбран p = %d, хотя помещается p = %d", n, rep.Ham, rep.Ham+1)
-		}
-		if seen[rep.Ham] {
-			continue
-		}
-		seen[rep.Ham] = true
-		out, _, err := EmbedCover(cv, text, opt)
-		if err != nil {
-			t.Fatalf("p = %d: %v", rep.Ham, err)
-		}
-		got, err := ExtractCover(out, "", nil, testMaster)
-		if err != nil || got.Text != alphabet.Normalize(text) {
-			t.Fatalf("p = %d (%d символов): %v", rep.Ham, n, err)
-		}
-		if got.H != hamCode+rep.Ham || got.W != 1 || got.Version != formatVersion {
-			t.Fatalf("p = %d: в заголовке h = %d, w = %d, версия %d", rep.Ham, got.H, got.W, got.Version)
-		}
-	}
-	for p := 1; p <= 4; p++ {
-		if !seen[p] {
-			t.Errorf("код с p = %d ни разу не выбран", p)
-		}
-	}
-}
-
 // «Обычная»: короткое сообщение в большом изображении пишется с наибольшей
 // шириной (1023) и высотой 12, в маленьком — заголовок узкий (w = 8), и всё
 // читается.
@@ -245,7 +194,7 @@ func TestNormalLevelWidths(t *testing.T) {
 	if err != nil || rep.W != maxW || rep.H != 12 || rep.Ham != 0 || rep.Coded != rep.Ciphertext {
 		t.Fatalf("большое изображение: %+v, %v", rep, err)
 	}
-	if hw := styleNormal.coding(rep.Elements).w; hw != 64 {
+	if hw := stylesV6[0].coding(rep.Elements).w; hw != 64 {
 		t.Fatalf("ширина заголовка %d", hw)
 	}
 
@@ -254,7 +203,7 @@ func TestNormalLevelWidths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hw := styleNormal.coding(rep.Elements).w; hw != 8 {
+	if hw := stylesV6[0].coding(rep.Elements).w; hw != 8 {
 		t.Fatalf("маленькое изображение: ширина заголовка %d", hw)
 	}
 	if rep.W < 1 || rep.W >= 64 || rep.Used > rep.Elements {
@@ -308,7 +257,7 @@ func TestNormalLevelDamageIsDetected(t *testing.T) {
 	if !ok {
 		t.Fatal("позиции")
 	}
-	hElems := styleNormal.elems(rep.Elements)
+	hElems := stylesV6[0].elems(rep.Elements)
 	for _, t0 := range []int{hElems, hElems + 1000, rep.Used - 1} {
 		bad := out.Clone()
 		bad.Pix[pos[t0]] ^= 1

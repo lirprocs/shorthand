@@ -11,7 +11,7 @@ import (
 	"github.com/lirprocs/shorthand/internal/ecc/rs"
 )
 
-// Формат v3, заголовок версии 5.
+// Формат v3, заголовок версии 6.
 //
 // Порядок элементов задаёт ключевая перестановка (perm.go) с пропуском
 // полностью прозрачных пикселей. Первые элементы — заголовок, следующие —
@@ -20,11 +20,14 @@ import (
 // Заголовок (26 байт):
 //
 //	0–15  R — 16 случайных байт, свои у каждого сообщения
-//	16–17 «SH»
-//	18    версия = 5
+//	16    «S»
+//	17    r / 2 — проверочных байтов кода Рида–Соломона сообщения на блок
+//	      (0 — без кода; r ≤ 254)
+//	18    версия = 6
 //	19    биты 0–1 — режим шифрования, 2–3 — способ сжатия,
-//	      4–5 — уровень устойчивости, 6–7 — старшие биты w
-//	20    h: 1…12 — высота STC; 32 + p — код Хэмминга с p битами на группу
+//	      4–5 — уровень устойчивости (3 — своя цель), 6–7 — старшие биты w
+//	20    биты 0–5 — h: 1…12 — высота STC; 32 + p — код Хэмминга с p битами
+//	      на группу; биты 6–7 — способ записи заголовка (stylesV6)
 //	21    младшие 8 бит w — элементов на бит сообщения в STC (1…1023);
 //	      у кода Хэмминга w = 1
 //	22–25 L — длина шифротекста с имитовставкой, байт (big-endian)
@@ -33,8 +36,27 @@ import (
 // заголовке нет ни одного бита, одинакового у двух сообщений: R случаен,
 // остальное зависит от R.
 //
-// 26 байт защищаются кодом Рида–Соломона и записываются тем же способом, что
-// и сообщение своего уровня, — изменяются самые дешёвые по HILL элементы:
+// Способ записи сообщения, код RS и способ записи заголовка выбирает модель
+// (model.go) по цели уровня — каким повреждениям сообщение должно
+// противостоять. В версии 5 они были заданы уровнем; в версии 6 записаны в
+// заголовок, поэтому правило выбора можно менять без потери совместимости.
+// Для этого второй байт сигнатуры «SH» отдан под r: сигнатура версии 6 —
+// «S» и номер версии.
+//
+// 26 байт защищаются кодом Рида–Соломона и записываются одним из четырёх
+// способов — изменяются самые дешёвые по HILL элементы:
+//
+//	способ  код заголовка  запись заголовка          когда
+//	0       RS(34, 26)     STC h = 10, w = 8…64      канал без потерь («обычная»)
+//	1       RS(90, 26)     код Хэмминга (15, 11)     слабые повреждения
+//	2       RS(90, 26)     h = 1, w = 1              сильнее
+//	3       RS(154, 26)    h = 1, w = 1              ещё сильнее (новый в версии 6)
+//
+// Модель берёт самый слабый способ, у которого вероятность потерять
+// заголовок не больше половины допустимой вероятности отказа.
+//
+// Версия 5 (только чтение): способ записи заголовка и код сообщения задавал
+// уровень:
 //
 //	уровень        код заголовка  запись заголовка          код сообщения  запись сообщения
 //	обычная        RS(34, 26)     STC h = 10, w = 8…64      нет            STC h = 10…12, w ≤ 1023
@@ -58,8 +80,8 @@ import (
 // коротком сообщении (раздел 7). Канал «обычной» — без потерь; целостность
 // проверяет имитовставка.
 //
-// На «повышенной» p — наибольшее из 4, 3, 2, 1, при котором сообщение
-// помещается (p = 1 — прямая запись бита в элемент).
+// В версии 5 на «повышенной» p — наибольшее из 4, 3, 2, 1, при котором
+// сообщение помещается (p = 1 — прямая запись бита в элемент).
 //
 // Декодер пробует все способы записи заголовка, в том числе прежние.
 //
@@ -71,18 +93,19 @@ import (
 // дополнительные данные = 26 байт заголовка без маски || имитозащищаемые
 // данные пользователя.
 //
-// Заголовки версий 3 и 4 только читаются; их устройство — в compat.go.
+// Заголовки версий 3, 4 и 5 только читаются; устройство версий 3 и 4 — в
+// compat.go.
 
 const (
 	headerLen     = 26
-	formatVersion = 5
+	formatVersion = 6
 	maxW          = 1023 // наибольшая ширина STC; в версиях 3 и 4 — maxWOld
 	saltLen       = 16   // R
 )
 
 // headerStyle — способ записи заголовка.
 type headerStyle struct {
-	version int  // версия заголовка: 5; 4 и 3 — только чтение
+	version int  // версия заголовка: 6; 5, 4 и 3 — только чтение
 	parity  int  // проверочных байтов RS
 	repeat  int  // версия 3: повторов каждого бита прямым ±1
 	h, w    int  // параметры STC
@@ -91,13 +114,23 @@ type headerStyle struct {
 }
 
 var (
-	styleNormal = headerStyle{version: 5, parity: 8, h: 10, wide: true}
-	styleHigh   = headerStyle{version: 5, parity: 64, ham: 4}
-	styleMax    = headerStyle{version: 5, parity: 64, h: 1, w: 1}
+	// stylesV6 — способы записи заголовка версии 6; номер способа — в
+	// заголовке (биты 6–7 байта 20).
+	stylesV6 = [4]headerStyle{
+		{version: 6, parity: 8, h: 10, wide: true},
+		{version: 6, parity: 64, ham: 4},
+		{version: 6, parity: 64, h: 1, w: 1},
+		{version: 6, parity: 128, h: 1, w: 1},
+	}
+
+	styleNormalV5 = headerStyle{version: 5, parity: 8, h: 10, wide: true}
+	styleHighV5   = headerStyle{version: 5, parity: 64, ham: 4}
+	styleMaxV5    = headerStyle{version: 5, parity: 64, h: 1, w: 1}
 
 	// headerStyles — порядок перебора при извлечении.
 	headerStyles = []headerStyle{
-		styleNormal, styleHigh, styleMax,
+		stylesV6[0], stylesV6[1], stylesV6[2], stylesV6[3],
+		styleNormalV5, styleHighV5, styleMaxV5,
 		styleNormalV4, styleHighV4, styleMaxV4,
 		styleCompactV3, styleRobustV3,
 	}
@@ -132,21 +165,24 @@ func headerWidth(usable, bits int) int {
 	return max(8, min(64, usable/(8*bits)))
 }
 
-// styleFor — способ записи заголовка для версии и уровня.
-func styleFor(version int, l Level) headerStyle {
-	switch version {
+// styleOf — способ записи, которым должен быть записан заголовок h: в
+// версии 6 — его поле способа, в прежних — по уровню.
+func styleOf(h *Header) headerStyle {
+	switch h.Version {
 	case 3:
-		return styleForV3(l)
+		return styleForV3(h.Level)
 	case 4:
-		return styleForV4(l)
+		return styleForV4(h.Level)
+	case 5:
+		switch h.Level {
+		case LevelNormal:
+			return styleNormalV5
+		case LevelHigh:
+			return styleHighV5
+		}
+		return styleMaxV5
 	}
-	switch l {
-	case LevelNormal:
-		return styleNormal
-	case LevelHigh:
-		return styleHigh
-	}
-	return styleMax
+	return stylesV6[h.Class&3]
 }
 
 var magic = [2]byte{'S', 'H'}
@@ -158,6 +194,7 @@ const (
 	LevelNormal Level = 0 // «обычная»: наибольшая скрытность
 	LevelHigh   Level = 1 // «повышенная»
 	LevelMax    Level = 2 // «максимальная»
+	LevelCustom Level = 3 // своя цель (Options.Target), только версия 6
 )
 
 // LevelParams — параметры уровня: проверочных байтов RS на блок 255 (0 — без
@@ -172,17 +209,23 @@ type LevelParams struct {
 	Ham  int
 }
 
-// levelParams — значения подобраны экспериментом (cmd/stegobench,
-// docs/EXPERIMENTS.md, разделы 2 и 7). h и w записываются в заголовок явно,
-// поэтому их можно менять без потери совместимости; код RS задан версией
-// заголовка и уровнем (msgParity).
+// levelParams — способы записи уровней версии 5, подобранные экспериментом
+// (cmd/stegobench, docs/EXPERIMENTS.md, разделы 2 и 7). В версии 6 способ
+// выбирает модель (model.go); таблица нужна для чтения версии 5 (код RS
+// сообщения) и стенду: варианты с заданным способом записи берут код RS
+// отсюда.
 var levelParams = [3]LevelParams{
 	LevelNormal: {RS: 0, H: 12, MaxW: maxW},
 	LevelHigh:   {RS: 64, H: 1, MaxW: 4, Ham: 4},
 	LevelMax:    {RS: 128, H: 1, MaxW: 1},
 }
 
-func (l Level) Params() LevelParams { return levelParams[l] }
+func (l Level) Params() LevelParams {
+	if l > LevelMax {
+		return LevelParams{}
+	}
+	return levelParams[l]
+}
 
 func (l Level) String() string {
 	switch l {
@@ -192,6 +235,8 @@ func (l Level) String() string {
 		return "повышенная"
 	case LevelMax:
 		return "максимальная"
+	case LevelCustom:
+		return "своя цель"
 	}
 	return fmt.Sprintf("уровень %d", uint8(l))
 }
@@ -213,13 +258,17 @@ func stcHeight(bits, w, hmax int) int {
 	return h
 }
 
-// msgParity — проверочных байтов RS у сообщения: в версии 5 «обычная» кода не
-// имеет, в версиях 3 и 4 — 32 байта.
-func msgParity(version int, l Level) int {
-	if version >= 5 {
-		return levelParams[l].RS
+// msgParity — проверочных байтов RS у сообщения: в версии 6 — из заголовка,
+// в версии 5 — по уровню («обычная» кода не имеет), в версиях 3 и 4 — 32, 64,
+// 128 байт.
+func msgParity(h *Header) int {
+	switch {
+	case h.Version >= 6:
+		return h.RS
+	case h.Version == 5:
+		return levelParams[h.Level].RS
 	}
-	return [3]int{32, 64, 128}[l]
+	return [3]int{32, 64, 128}[h.Level]
 }
 
 // codedLen и encodeStream — код сообщения; parity = 0 — без кода.
@@ -239,19 +288,21 @@ func encodeStream(data []byte, parity int) []byte {
 
 // Header — поля заголовка.
 type Header struct {
-	Version int // 5; 4 и 3 — у изображений прежних версий
+	Version int // 6; 5, 4 и 3 — у изображений прежних версий
 	Mode    suite.Mode
 	Method  compress.Method
 	Level   Level
 	H, W    int // поля h и w: способ записи сообщения (codingOf)
 	Length  int // байт шифротекста с имитовставкой
+	RS      int // версия 6: проверочных байтов RS сообщения на блок (чётное, ≤ 254)
+	Class   int // версия 6: способ записи заголовка (stylesV6)
 	// Nonce — R: соль ключей сообщения и основа nonce шифра. В версии 3 —
 	// сам nonce (для «Магмы» — 8 байт и нули).
 	Nonce [saltLen]byte
 }
 
-// Marshal — 26 байт заголовка версий 4 и 5 без маски (они же —
-// дополнительные данные шифра). Version = 0 — нынешняя версия.
+// Marshal — 26 байт заголовка версий 4–6 без маски (они же — дополнительные
+// данные шифра). Version = 0 — нынешняя версия.
 func (h *Header) Marshal() []byte {
 	v := h.Version
 	if v == 0 {
@@ -264,6 +315,10 @@ func (h *Header) Marshal() []byte {
 	f[2] = byte(v)
 	f[3] = byte(h.Mode)&3 | (byte(h.Method)&3)<<2 | (byte(h.Level)&3)<<4 | byte(h.W>>8&3)<<6
 	f[4] = byte(h.H)
+	if v >= 6 {
+		f[1] = byte(h.RS / 2)
+		f[4] = byte(h.H)&63 | byte(h.Class&3)<<6
+	}
 	f[5] = byte(h.W)
 	binary.BigEndian.PutUint32(f[6:10], uint32(h.Length))
 	return b
@@ -277,7 +332,7 @@ func (h *Header) aeadNonce() []byte {
 	return n
 }
 
-// maskFields накладывает (или снимает) маску на поля заголовка версий 4 и 5:
+// maskFields накладывает (или снимает) маску на поля заголовка версий 4–6:
 // байты 16–25 складываются по XOR с HKDF(master, соль = R).
 func maskFields(b, master []byte, m suite.Mode) {
 	mask := kdf.Derive(master, b[:saltLen], infoFields(m), headerLen-saltLen)
@@ -288,18 +343,27 @@ func maskFields(b, master []byte, m suite.Mode) {
 
 var errBadHeader = errors.New("заголовок не распознан")
 
-// parseHeader разбирает 26 байт заголовка версии 4 или 5 без маски.
+// parseHeader разбирает 26 байт заголовка версий 4–6 без маски.
 func parseHeader(b []byte) (*Header, error) {
 	if len(b) != headerLen {
 		return nil, errBadHeader
 	}
 	f := b[saltLen:]
-	if f[0] != magic[0] || f[1] != magic[1] || f[2] != 4 && f[2] != formatVersion {
+	h := &Header{Version: int(f[2])}
+	hh := f[4]
+	switch {
+	case f[0] != magic[0]:
+		return nil, errBadHeader
+	case h.Version == 6:
+		if f[1] > maxRS/2 {
+			return nil, errBadHeader
+		}
+		h.RS, h.Class, hh = 2*int(f[1]), int(f[4]>>6), f[4]&63
+	case f[1] != magic[1] || h.Version != 4 && h.Version != 5:
 		return nil, errBadHeader
 	}
-	h := &Header{Version: int(f[2])}
 	copy(h.Nonce[:], b[:saltLen])
-	return h, h.setFields(f[3], f[4], f[5], f[6:10])
+	return h, h.setFields(f[3], hh, f[5], f[6:10])
 }
 
 // setFields заполняет и проверяет поля, общие для всех версий; Version уже
@@ -320,7 +384,11 @@ func (h *Header) setFields(flags, hh, w byte, length []byte) error {
 	}
 	stc := h.H >= 1 && h.H <= 12 && h.W >= 1 && h.W <= wLimit
 	ham := h.Version >= 5 && h.H > hamCode && h.H <= hamCode+hamMaxP && h.W == 1
-	if !h.Mode.Valid() || h.Level > LevelMax || h.Method > compress.Deflate ||
+	maxLevel := LevelMax
+	if h.Version >= 6 {
+		maxLevel = LevelCustom
+	}
+	if !h.Mode.Valid() || h.Level > maxLevel || h.Method > compress.Deflate ||
 		!stc && !ham || h.Length < 1 || h.Length > 1<<28 {
 		return errBadHeader
 	}

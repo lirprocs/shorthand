@@ -38,8 +38,10 @@ var iconPNG []byte
 const windowTitle = "Shorthand — стеганография"
 
 var (
-	modeNames  = []string{suite.KuznyechikMGM.String(), suite.AsconAEAD128.String(), suite.MagmaMGM.String()}
-	levelNames = []string{"Обычная (наибольшая скрытность)", "Повышенная", "Максимальная"}
+	modeNames = []string{suite.KuznyechikMGM.String(), suite.AsconAEAD128.String(), suite.MagmaMGM.String()}
+	// у устойчивых уровней — повреждения, которые сообщение должно пережить
+	// (цель модели выбора параметров, stego.Level.Target)
+	levelNames = []string{"Обычная (наибольшая скрытность)", "Повышенная: шум 0,5 %, закраска 1 %", "Максимальная: шум 2 %, закраска 5 %"}
 )
 
 func modeByName(s string) suite.Mode {
@@ -312,12 +314,16 @@ func (t *embedTab) refresh() {
 		// стрелку «→» шрифт Fyne не содержит — только слова
 		// на «обычной» кода Рида–Соломона нет: только имитовставка
 		coded := "с имитовставкой"
-		if rep.Coded != rep.Ciphertext {
-			coded += " и кодом Рида–Соломона"
+		if rep.RS > 0 {
+			coded += fmt.Sprintf(" и кодом Рида–Соломона (%d проверочных байт на блок)", rep.RS)
+		}
+		robust := ""
+		if rep.HeaderClass > 0 { // уровень с повреждениями
+			robust = fmt.Sprintf(" По модели сообщение переживёт такие повреждения с вероятностью не ниже %d%%.", min(int(100*rep.Reliability), 99))
 		}
 		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), %s — %d байт. "+
-			"Занято %.2f%% пригодных элементов, %s.",
-			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread()))
+			"Занято %.2f%% пригодных элементов, %s.%s",
+			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread(), robust))
 	}
 }
 

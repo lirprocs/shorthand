@@ -28,7 +28,7 @@ func writeHeader(t *testing.T, cv *Cover, master []byte, hdr Header) {
 	t.Helper()
 	k := keys{master: master}
 	usable := usableCount(cv)
-	style := styleFor(formatVersion, hdr.Level)
+	style := styleOf(&hdr)
 	pos, ok := positions(k.perm(hdr.Mode, cv.Len()), cv, style.elems(usable))
 	if !ok {
 		t.Fatal("контейнер мал для заголовка")
@@ -67,7 +67,8 @@ func TestHeaderRoundTrip(t *testing.T) {
 }
 
 // Какие сочетания версии и полей h, w допустимы: код Хэмминга и ширина больше
-// 64 (до 1023, старшие биты — в байте 19) появились в версии 5.
+// 64 (до 1023, старшие биты — в байте 19) появились в версии 5; в версии 6
+// те же поля.
 func TestHeaderFieldLimits(t *testing.T) {
 	for _, c := range []struct {
 		version, h, w int
@@ -80,7 +81,9 @@ func TestHeaderFieldLimits(t *testing.T) {
 		{5, hamCode + hamMaxP + 1, 1, false}, {5, hamCode + 4, 2, false}, {5, hamCode, 1, false},
 		{5, 13, 1, false}, {5, 0, 1, false}, {5, 10, 0, false},
 		{4, 10, 64, true}, {4, 1, 4, true}, {4, 10, 65, false}, {4, hamCode + 4, 1, false},
-		{6, 10, 8, false}, {3, 10, 8, false}, // версию 3 разбирает parseHeaderV3
+		{6, 10, 8, true}, {6, 12, 1023, true}, {6, hamCode + 8, 1, true}, {6, 1, 8, true},
+		{6, 13, 1, false}, {6, hamCode + 9, 1, false},
+		{7, 10, 8, false}, {3, 10, 8, false}, // версию 3 разбирает parseHeaderV3
 	} {
 		h := Header{Version: c.version, Mode: suite.AsconAEAD128, Level: LevelNormal, H: c.h, W: c.w, Length: 100}
 		got, err := parseHeader(h.Marshal())
@@ -96,7 +99,7 @@ func TestHeaderFieldLimits(t *testing.T) {
 // Ширина STC заголовка «обычной»: от 8 до 64, не больше восьмой части
 // изображения. Значения — часть формата.
 func TestHeaderWidth(t *testing.T) {
-	bits := styleNormal.bits()
+	bits := stylesV6[0].bits()
 	if bits != 272 {
 		t.Fatalf("заголовок «обычной» — %d бит", bits)
 	}
@@ -105,10 +108,10 @@ func TestHeaderWidth(t *testing.T) {
 			t.Errorf("пригодных элементов %d: ширина %d, ожидалось %d", usable, got, want)
 		}
 	}
-	if n := styleHigh.elems(1 << 20); n != 2700 {
+	if n := stylesV6[1].elems(1 << 20); n != 2700 {
 		t.Errorf("заголовок «повышенной» занимает %d элементов", n)
 	}
-	if n := styleMax.elems(1 << 20); n != 720 {
+	if n := stylesV6[2].elems(1 << 20); n != 720 {
 		t.Errorf("заголовок «максимальной» занимает %d элементов", n)
 	}
 }
@@ -125,7 +128,7 @@ func TestCraftedLengthDoesNotAllocate(t *testing.T) {
 			cd = coding{ham: lp.Ham}
 		}
 		hf, wf := cd.fields()
-		writeHeader(t, cv, testMaster, Header{Mode: suite.KuznyechikMGM, Level: lvl, H: hf, W: wf, Length: 1 << 28})
+		writeHeader(t, cv, testMaster, Header{Mode: suite.KuznyechikMGM, Level: lvl, Class: int(lvl), H: hf, W: wf, Length: 1 << 28})
 		var a, b runtime.MemStats
 		runtime.ReadMemStats(&a)
 		res, err := ExtractCover(cv, "", nil, testMaster)

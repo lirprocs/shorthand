@@ -16,42 +16,56 @@ import (
 // генератор, перестановку, строки info, подматрицы STC, код Хэмминга,
 // заголовок, код Рида–Соломона, сжатие, алфавит.
 //
-//   - v5_*.png — нынешний заголовок версии 5 (ветка v3.2);
+//   - v6_*.png — нынешний заголовок версии 6 (ветка v3.3): параметры выбраны
+//     моделью (model.go);
+//   - v5_*.png — заголовок версии 5 (ветка v3.2): только чтение, записаны
+//     сборкой коммита c59e906;
 //   - v4_*.png — заголовок версии 4 (ветка v3.1, master до v3.2): только чтение,
 //     записаны сборкой коммита cb1eea6;
 //   - v3_*.png — заголовок версии 3: compat_test.go.
 //
-// Ключ — testMaster, имитозащищаемые данные — «v4» и «v5». Пересоздать эталоны
-// версии 5 (только при намеренной смене формата; прежние эталоны остаются под
-// своими именами, а читать их должен код совместимости):
+// Ключ — testMaster, имитозащищаемые данные — «v4», «v5», «v6». Пересоздать
+// эталоны версии 6 (только при намеренной смене формата; прежние эталоны
+// остаются под своими именами, а читать их должен код совместимости):
 //
-//	SHORTHAND_WRITE_GOLDEN=1 go test -run TestReadsV5Images ./internal/stego
+//	SHORTHAND_WRITE_GOLDEN=1 go test -run TestReadsV6Images ./internal/stego
 type golden struct {
-	name string
-	mode suite.Mode
-	lvl  Level
-	gray bool
+	name   string
+	mode   suite.Mode
+	lvl    Level
+	gray   bool
+	target *Target // своя цель (уровень в заголовке — LevelCustom)
 }
 
 var goldenV4 = []golden{
-	{"v4_kuznyechik_normal", suite.KuznyechikMGM, LevelNormal, false},
-	{"v4_kuznyechik_high", suite.KuznyechikMGM, LevelHigh, false},
-	{"v4_kuznyechik_max", suite.KuznyechikMGM, LevelMax, true},
-	{"v4_ascon_normal", suite.AsconAEAD128, LevelNormal, true},
-	{"v4_ascon_high", suite.AsconAEAD128, LevelHigh, false},
-	{"v4_magma_normal", suite.MagmaMGM, LevelNormal, false},
-	{"v4_magma_max", suite.MagmaMGM, LevelMax, false},
+	{"v4_kuznyechik_normal", suite.KuznyechikMGM, LevelNormal, false, nil},
+	{"v4_kuznyechik_high", suite.KuznyechikMGM, LevelHigh, false, nil},
+	{"v4_kuznyechik_max", suite.KuznyechikMGM, LevelMax, true, nil},
+	{"v4_ascon_normal", suite.AsconAEAD128, LevelNormal, true, nil},
+	{"v4_ascon_high", suite.AsconAEAD128, LevelHigh, false, nil},
+	{"v4_magma_normal", suite.MagmaMGM, LevelNormal, false, nil},
+	{"v4_magma_max", suite.MagmaMGM, LevelMax, false, nil},
+}
+
+var goldenV6 = []golden{
+	{"v6_kuznyechik_normal", suite.KuznyechikMGM, LevelNormal, false, nil},
+	{"v6_kuznyechik_high", suite.KuznyechikMGM, LevelHigh, false, nil},
+	{"v6_kuznyechik_max", suite.KuznyechikMGM, LevelMax, true, nil},
+	{"v6_ascon_high", suite.AsconAEAD128, LevelHigh, true, nil},
+	{"v6_ascon_custom", suite.AsconAEAD128, LevelCustom, false, &Target{Noise: 0.01, Paint: 0.08}},
+	{"v6_magma_normal", suite.MagmaMGM, LevelNormal, false, nil},
+	{"v6_magma_max", suite.MagmaMGM, LevelMax, false, nil},
 }
 
 var goldenV5 = []golden{
-	{"v5_kuznyechik_normal", suite.KuznyechikMGM, LevelNormal, false},
-	{"v5_kuznyechik_high", suite.KuznyechikMGM, LevelHigh, false},
-	{"v5_kuznyechik_max", suite.KuznyechikMGM, LevelMax, true},
-	{"v5_ascon_normal", suite.AsconAEAD128, LevelNormal, true},
-	{"v5_ascon_high", suite.AsconAEAD128, LevelHigh, true},
-	{"v5_magma_normal", suite.MagmaMGM, LevelNormal, false},
-	{"v5_magma_high", suite.MagmaMGM, LevelHigh, false},
-	{"v5_magma_max", suite.MagmaMGM, LevelMax, false},
+	{"v5_kuznyechik_normal", suite.KuznyechikMGM, LevelNormal, false, nil},
+	{"v5_kuznyechik_high", suite.KuznyechikMGM, LevelHigh, false, nil},
+	{"v5_kuznyechik_max", suite.KuznyechikMGM, LevelMax, true, nil},
+	{"v5_ascon_normal", suite.AsconAEAD128, LevelNormal, true, nil},
+	{"v5_ascon_high", suite.AsconAEAD128, LevelHigh, true, nil},
+	{"v5_magma_normal", suite.MagmaMGM, LevelNormal, false, nil},
+	{"v5_magma_high", suite.MagmaMGM, LevelHigh, false, nil},
+	{"v5_magma_max", suite.MagmaMGM, LevelMax, false, nil},
 }
 
 func goldenText(version int, name string) string {
@@ -88,11 +102,21 @@ func TestReadsV4Images(t *testing.T) {
 }
 
 func TestReadsV5Images(t *testing.T) {
-	for i, g := range goldenV5 {
+	for _, g := range goldenV5 {
+		readGolden(t, g, 5)
+	}
+}
+
+func TestReadsV6Images(t *testing.T) {
+	for i, g := range goldenV6 {
 		if os.Getenv("SHORTHAND_WRITE_GOLDEN") != "" {
-			nonce := bytes.Repeat([]byte{byte(0xb0 + i)}, saltLen)
-			out, _, err := Embed(testImage(72, 56, int64(500+i), g.gray), goldenText(5, g.name),
-				Options{Mode: g.mode, Level: g.lvl, Master: testMaster, AAD: []byte("v5"), Nonce: nonce})
+			nonce := bytes.Repeat([]byte{byte(0xc0 + i)}, saltLen)
+			lvl := g.lvl
+			if g.target != nil {
+				lvl = LevelNormal
+			}
+			out, _, err := Embed(testImage(96, 72, int64(600+i), g.gray), goldenText(6, g.name),
+				Options{Mode: g.mode, Level: lvl, Target: g.target, Master: testMaster, AAD: []byte("v6"), Nonce: nonce})
 			if err != nil {
 				t.Fatalf("%s: %v", g.name, err)
 			}
@@ -104,14 +128,16 @@ func TestReadsV5Images(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		readGolden(t, g, 5)
+		readGolden(t, g, 6)
 	}
 }
 
 // Заголовок не должен разбираться с паникой ни на каких 26 байтах.
 func FuzzParseHeader(f *testing.F) {
-	h := Header{Version: formatVersion, Mode: suite.MagmaMGM, Level: LevelHigh, H: hamCode + 4, W: 1, Length: 100}
+	h := Header{Version: formatVersion, Mode: suite.MagmaMGM, Level: LevelHigh, H: hamCode + 4, W: 1, Length: 100, RS: 68, Class: 1}
 	f.Add(h.Marshal())
+	v5 := Header{Version: 5, Mode: suite.AsconAEAD128, Level: LevelMax, H: 1, W: 1, Length: 300}
+	f.Add(v5.Marshal())
 	old := Header{Version: 4, Mode: suite.KuznyechikMGM, Level: LevelNormal, H: 10, W: 64, Length: 7}
 	f.Add(old.Marshal())
 	f.Add(make([]byte, headerLen))
