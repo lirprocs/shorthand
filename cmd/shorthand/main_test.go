@@ -46,6 +46,14 @@ func TestDrop(t *testing.T) {
 	if !strings.HasPrefix(emb.fileLabel.Text, "фото.png") {
 		t.Fatalf("подпись файла: %q", emb.fileLabel.Text)
 	}
+	// проверка контейнера: картинка 64×48 — малая, предупреждение сразу
+	if emb.check == nil || !emb.check.Small || !strings.HasPrefix(emb.status.Text, "Внимание:") || !strings.Contains(emb.status.Text, "64×48") {
+		t.Fatalf("проверка контейнера: %+v, %q", emb.check, emb.status.Text)
+	}
+	emb.textEntry.SetText("Привет")
+	if !strings.Contains(emb.info.Text, "Риск обнаружения") {
+		t.Fatalf("сводка без риска: %q", emb.info.Text)
+	}
 	emb.drop(txt)
 	if emb.textEntry.Text != "Привет из файла" {
 		t.Fatalf("текст: %q", emb.textEntry.Text)

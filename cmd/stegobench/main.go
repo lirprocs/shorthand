@@ -4,6 +4,7 @@
 //	stegobench prepare -out data -src "C:/Windows/Web/Wallpaper/Theme1,..." [-scale 2] [-tile 256]
 //	stegobench detect  -data data/tiles -out results
 //	stegobench robust  -data data/full  -out results
+//	stegobench precheck -data папка1,папка2 -out results
 //	stegobench ciphers -out results
 //	stegobench compress -out results [-text файл.txt]
 //	stegobench embed -in контейнер.png -out стего.png -method v3|v3h|v3m|pm1|report|v2 -rate 0.05
@@ -35,6 +36,7 @@ import (
 	"github.com/lirprocs/shorthand/internal/compress"
 	"github.com/lirprocs/shorthand/internal/crypto/suite"
 	"github.com/lirprocs/shorthand/internal/imageio"
+	"github.com/lirprocs/shorthand/internal/precheck"
 	"github.com/lirprocs/shorthand/internal/stego"
 )
 
@@ -42,7 +44,7 @@ var master = bytes.Repeat([]byte{0x42}, 32) // вместо Argon2 — уско�
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "команда: prepare | detect | robust | ciphers | compress")
+		fmt.Fprintln(os.Stderr, "команда: prepare | detect | robust | precheck | ciphers | compress | embed")
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
@@ -70,6 +72,8 @@ func main() {
 		err = detect(*data, *out)
 	case "robust":
 		err = robust(*data, *out)
+	case "precheck":
+		err = precheckReport(strings.Split(*data, ","), *out)
 	case "ciphers":
 		err = ciphers(*out)
 	case "compress":
@@ -723,4 +727,51 @@ func compressReport(out, extra string) error {
 		fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %d | %s | %.2f |\n", n, len(t), gz.Len(), p, c, d, m, 8*float64(len(best))/float64(n))
 	}
 	return writeReport(out, "compress.md", b.String())
+}
+
+// ─── проверка контейнеров ───────────────────────────────────────────────────
+
+// precheckReport — признаки плохого контейнера для всех PNG/BMP из папок: по
+// ним подобраны пороги internal/precheck.
+func precheckReport(dirs []string, out string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Проверка контейнеров\n\nПороги: следы JPEG — %.2f, текстура — %.2f, ровные элементы — %.2f, меньшая сторона — %d.\n\n",
+		precheck.JPEGThreshold, precheck.TextureThreshold, precheck.FlatThreshold, precheck.MinSide)
+	fmt.Fprintf(&b, "| Папка | Файл | Размер | Следы JPEG | Шаг q | Текстура | Ровные | Время, мс | Вывод |\n|---|---|---|---|---|---|---|---|---|\n")
+	for _, dir := range dirs {
+		files, _ := filepath.Glob(filepath.Join(strings.TrimSpace(dir), "*"))
+		sort.Strings(files)
+		for _, f := range files {
+			if _, err := imageio.FormatOf(f); err != nil {
+				continue
+			}
+			img, _, err := imageio.Load(f)
+			if err != nil {
+				return err
+			}
+			cv := stego.FromImage(img)
+			t0 := time.Now()
+			r := precheck.Check(cv)
+			ms := time.Since(t0).Milliseconds()
+			var verdict []string
+			if r.JPEG {
+				verdict = append(verdict, "был JPEG")
+			}
+			if r.LowTexture {
+				verdict = append(verdict, "мало текстуры")
+			}
+			if r.Flatty {
+				verdict = append(verdict, "ровные области")
+			}
+			if r.Small {
+				verdict = append(verdict, "мало")
+			}
+			if len(verdict) == 0 {
+				verdict = []string{"годится"}
+			}
+			fmt.Fprintf(&b, "| %s | %s | %d×%d | %.3f | %d | %.2f | %.3f | %d | %s |\n",
+				filepath.Base(dir), filepath.Base(f), cv.W, cv.H, r.JPEGScore, r.JPEGQ, r.Texture, r.Flat, ms, strings.Join(verdict, ", "))
+		}
+	}
+	return writeReport(out, "precheck.md", b.String())
 }

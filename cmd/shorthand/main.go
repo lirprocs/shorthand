@@ -26,6 +26,7 @@ import (
 	"github.com/lirprocs/shorthand/internal/alphabet"
 	"github.com/lirprocs/shorthand/internal/crypto/suite"
 	"github.com/lirprocs/shorthand/internal/imageio"
+	"github.com/lirprocs/shorthand/internal/precheck"
 	"github.com/lirprocs/shorthand/internal/stego"
 )
 
@@ -148,7 +149,8 @@ type embedTab struct {
 	inPath, outPath string
 	outChosen       bool // путь сохранения выбран вручную
 	cover           *stego.Cover
-	textBuf         string // текст из файла, если он слишком велик для поля ввода
+	check           *precheck.Report // проверка контейнера (при выборе изображения)
+	textBuf         string           // текст из файла, если он слишком велик для поля ввода
 
 	fileLabel, outLabel *widget.Label
 	info, status        *widget.Label
@@ -321,9 +323,11 @@ func (t *embedTab) refresh() {
 		if rep.HeaderClass > 0 { // уровень с повреждениями
 			robust = fmt.Sprintf(" По модели сообщение переживёт такие повреждения с вероятностью не ниже %d%%.", min(int(100*rep.Reliability), 99))
 		}
+		risk, auc, _ := precheck.RiskOf(rep, t.check)
 		t.info.SetText(fmt.Sprintf("Текст: %d симв., после сжатия %d байт (%s), %s — %d байт. "+
-			"Занято %.2f%% пригодных элементов, %s.%s",
-			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread(), robust))
+			"Занято %.2f%% пригодных элементов, %s.%s Риск обнаружения — %s (ожидаемый AUC детектора SPAM — %.2f).",
+			rep.Chars, rep.Compressed, rep.Method, coded, rep.Coded, 100*float64(rep.Used)/float64(rep.Elements), rep.Spread(), robust,
+			risk, auc))
 	}
 }
 
@@ -334,12 +338,22 @@ func (t *embedTab) loadImage(p string) {
 		return
 	}
 	t.inPath, t.cover = p, stego.FromImage(img)
+	t.check = precheck.Check(t.cover)
 	t.fileLabel.SetText(showPath("", p))
 	if !t.outChosen || samePath(t.outPath, t.inPath) {
 		t.setDefaultOut()
 	}
-	t.status.SetText("")
+	t.status.SetText(containerWarning(t.check))
 	t.refresh()
+}
+
+// containerWarning — предупреждение о плохом контейнере («» — замечаний нет).
+// Встраивание не запрещается: решает пользователь.
+func containerWarning(r *precheck.Report) string {
+	if r == nil || !r.Bad() {
+		return ""
+	}
+	return "Внимание: " + strings.Join(r.Warnings, "; ") + "."
 }
 
 // setDefaultOut — по умолчанию сохранять рядом с исходным: enc_<имя>.
