@@ -5,6 +5,8 @@
 //	stegobench detect  -data data/tiles -out results
 //	stegobench robust  -data data/full  -out results
 //	stegobench precheck -data папка1,папка2 -out results
+//	stegobench boss -data BOSSbase_1.01 -n 2000 -method v3|v3h|v3m|v5h|v5m|pm1|lsbr|cover -rate 0.1 -out папка
+//	stegobench ensemble -cover cover.bin -stego stego.bin -name подпись -out results
 //	stegobench ciphers -out results
 //	stegobench compress -out results [-text файл.txt]
 //	stegobench embed -in контейнер.png -out стего.png -method v3|v3h|v3m|pm1|report|v2 -rate 0.05
@@ -44,7 +46,7 @@ var master = bytes.Repeat([]byte{0x42}, 32) // вместо Argon2 — уско�
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "команда: prepare | detect | robust | precheck | ciphers | compress | embed")
+		fmt.Fprintln(os.Stderr, "команда: prepare | detect | robust | precheck | ciphers | compress | embed | boss | ensemble")
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
@@ -57,9 +59,16 @@ func main() {
 	textFile := fs.String("text", "", "дополнительный текст (compress)")
 	in := fs.String("in", "", "контейнер PNG/BMP (embed)")
 	meth := fs.String("method", "v3", "способ встраивания (embed)")
-	rate := fs.Float64("rate", 0.05, "нагрузка, бит на элемент (embed)")
+	rate := fs.Float64("rate", 0.05, "нагрузка, бит на элемент (embed, boss)")
+	n := fs.Int("n", 0, "изображений набора, 0 — все (boss)")
+	coverBin := fs.String("cover", "", "признаки пустых изображений, .bin (ensemble)")
+	stegoBin := fs.String("stego", "", "признаки стегоизображений, .bin (ensemble)")
+	dim := fs.Int("dim", 34671, "размерность признаков (ensemble)")
+	splits := fs.Int("splits", 5, "разбиений обучение/проверка (ensemble)")
+	dsub := fs.Int("dsub", 0, "размерность подпространства, 0 — подбор (ensemble)")
+	name := fs.String("name", "", "подпись строки результата (ensemble)")
 	fs.Parse(args)
-	if cmd != "embed" {
+	if cmd != "embed" && cmd != "boss" {
 		os.MkdirAll(*out, 0o755)
 	}
 	var err error
@@ -72,6 +81,10 @@ func main() {
 		err = detect(*data, *out)
 	case "robust":
 		err = robust(*data, *out)
+	case "boss":
+		err = bossEmbed(*data, *n, *meth, *rate, *out)
+	case "ensemble":
+		err = ensembleReport(*coverBin, *stegoBin, *dim, *splits, *dsub, *name, *out)
 	case "precheck":
 		err = precheckReport(strings.Split(*data, ","), *out)
 	case "ciphers":

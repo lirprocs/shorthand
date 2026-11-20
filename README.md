@@ -191,7 +191,7 @@ go test -run '^$' -fuzz '^FuzzTextRoundTrip$' -fuzztime 1m ./internal/compress
 | `internal/ecc/rs` | код Рида–Соломона с ошибками и стираниями |
 | `internal/stego` | контейнер, перестановка, HILL, STC, код Хэмминга, модель выбора параметров, формат v3 |
 | `internal/precheck` | проверка контейнера (следы JPEG, текстура, ровные области, размер) и риск обнаружения |
-| `internal/analysis` | детекторы χ², RS, SPA, SPAM+ЛДФ; PSNR, SSIM |
+| `internal/analysis` | детекторы χ², RS, SPA, SPAM+ЛДФ; классификатор-ансамбль для признаков SRM; PSNR, SSIM |
 | `internal/imageio` | чтение и запись PNG/BMP |
 | `docs` | устройство и результаты экспериментов |
 
@@ -211,6 +211,20 @@ go run ./cmd/stegobench robust -data data/full -out results
 
 ```bash
 go run ./cmd/stegobench precheck -data data/full -out results
+```
+
+Опыт на большом наборе (BOSSbase 1.01, признаки SRM, ансамбль; EXPERIMENTS.md,
+раздел 10): `boss` встраивает случайную нагрузку в серые PGM и пишет список
+стегоизображений, признаки считает программа SRM авторов (DDE Lab, в репозиторий
+не входит), `ensemble` обучает и проверяет классификатор по её двоичному выводу
+(N строк по 34 671 значению float32):
+
+```bash
+go run ./cmd/stegobench boss -data BOSSbase_1.01 -n 2000 -method v3 -rate 0.1 -out sets/v3_0.1
+```
+
+```bash
+go run ./cmd/stegobench ensemble -cover cover.bin -stego v3_0.1.bin -name "v3 0.1" -out results
 ```
 
 ```bash

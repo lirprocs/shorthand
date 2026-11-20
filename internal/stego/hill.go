@@ -113,3 +113,12 @@ func hillCosts(c *Cover, elems []int) []float64 {
 	wg.Wait()
 	return costs
 }
+
+// HILLCosts — стоимости HILL всех элементов контейнера (для стенда опытов).
+func HILLCosts(c *Cover) []float64 {
+	all := make([]int, c.Len())
+	for i := range all {
+		all[i] = i
+	}
+	return hillCosts(c, all)
+}
